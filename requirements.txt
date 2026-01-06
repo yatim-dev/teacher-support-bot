@@ -1,0 +1,6 @@
+aiogram==3.*
+SQLAlchemy==2.*
+asyncpg==0.*
+APScheduler==3.*
+python-dotenv==1.*
+pydantic-settings==2.*

@@ -181,3 +181,20 @@ class Notification(Base):
     payload: Mapped[Optional[str]] = mapped_column(Text)
     status: Mapped[NotificationStatus] = mapped_column(Enum(NotificationStatus), default=NotificationStatus.pending)
     last_error: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class Homework(Base):
+    __tablename__ = "homeworks"
+    __table_args__ = (UniqueConstraint("lesson_id"),)  # 1 ДЗ на 1 урок (если нужно несколько — уберёте)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    lesson_id: Mapped[int] = mapped_column(ForeignKey("lessons.id", ondelete="CASCADE"), index=True)
+
+    title: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str] = mapped_column(Text)
+
+    grade: Mapped[Optional[int]] = mapped_column(Integer)  # 1..10
+    graded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

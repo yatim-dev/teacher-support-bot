@@ -34,3 +34,9 @@ class FsmNavCb(CallbackData, prefix="fsm"):
     action: str           # back|cancel
     flow: str             # add_rule|add_single|create_student
     student_id: int | None = None
+
+class HomeworkCb(CallbackData, prefix="hw"):
+    action: str          # view|edit|grade|back
+    lesson_id: int
+    student_id: int
+    offset: int = 0

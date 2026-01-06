@@ -94,17 +94,48 @@ async def send_notifications_job(bot, batch_size: int = 50):
         u_map = {u.id: u for u in users}
 
         for n in notifs:
-            u = u_map[n.user_id]
+            u = u_map.get(n.user_id)
+            if not u:
+                # пользователь мог быть удалён (например, удалили ученика/родителя)
+                await session.execute(
+                    update(Notification).where(Notification.id == n.id)
+                    .values(status=NotificationStatus.failed, last_error="User not found")
+                )
+                await session.commit()
+                continue
+
             try:
                 if n.type in ("lesson_24h", "lesson_1h"):
-                    lesson = (await session.execute(select(Lesson).where(Lesson.id == n.entity_id))).scalar_one()
-                    student = (await session.execute(select(Student).where(Student.id == lesson.student_id))).scalar_one()
+                    lesson = (await session.execute(
+                        select(Lesson).where(Lesson.id == n.entity_id)
+                    )).scalar_one()
+
+                    student = (await session.execute(
+                        select(Student).where(Student.id == lesson.student_id)
+                    )).scalar_one()
 
                     when = fmt_dt_for_tz(lesson.start_at, u.timezone)
                     tzname = u.timezone or "Europe/Moscow"
-                    msg = f"Напоминание: урок скоро.\nУченик: {student.full_name}\nВремя: {when} ({tzname})"
-
+                    msg = (
+                        "Напоминание: урок скоро.\n"
+                        f"Ученик: {student.full_name}\n"
+                        f"Время: {when} ({tzname})"
+                    )
                     await bot.send_message(u.tg_id, msg)
+
+                elif n.type == "hw_graded":
+                    # payload формируем при выставлении оценки (ученик+родители),
+                    # поэтому тут просто отправляем готовый текст
+                    await bot.send_message(u.tg_id, n.payload or "Выставлена оценка за домашнее задание.")
+
+                else:
+                    # неизвестный тип уведомления
+                    await session.execute(
+                        update(Notification).where(Notification.id == n.id)
+                        .values(status=NotificationStatus.failed, last_error=f"Unknown notification type: {n.type}")
+                    )
+                    await session.commit()
+                    continue
 
                 await session.execute(
                     update(Notification).where(Notification.id == n.id)

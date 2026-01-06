@@ -1,7 +1,7 @@
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardMarkup
 
-from .callbacks import MenuCb, AdminCb, LessonCb, ChargeCb, TzCb, ChildCb, FsmNavCb
+from .callbacks import MenuCb, AdminCb, LessonCb, ChargeCb, TzCb, ChildCb, FsmNavCb, HomeworkCb
 
 
 TZ_LIST = [
@@ -88,12 +88,17 @@ def lesson_actions_kb(lesson_id: int, student_id: int, offset: int, is_recurring
     kb.button(text="◀", callback_data=LessonCb(action="prev", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
     kb.button(text="▶", callback_data=LessonCb(action="next", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
 
+    kb.button(
+        text="Домашнее задание",
+        callback_data=HomeworkCb(action="view", lesson_id=lesson_id, student_id=student_id, offset=offset).pack()
+    )
+
     if is_recurring:
         kb.button(text="Удалить цикл", callback_data=LessonCb(action="delete_series", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
 
     kb.button(text="Назад", callback_data=AdminCb(action="student", student_id=student_id).pack())
 
-    kb.adjust(2, 2, 1, 1)
+    kb.adjust(2, 2, 1, 1, 1)
     return kb.as_markup()
 
 
@@ -140,5 +145,13 @@ def student_delete_confirm_kb(student_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Да, удалить", callback_data=AdminCb(action="student_delete_confirm", student_id=student_id).pack())
     kb.button(text="⬅ Нет, назад", callback_data=AdminCb(action="student", student_id=student_id).pack())
+    kb.adjust(1)
+    return kb.as_markup()
+
+def homework_kb(lesson_id: int, student_id: int, offset: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✏️ Задать/Изменить", callback_data=HomeworkCb(action="edit", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
+    kb.button(text="✅ Поставить оценку", callback_data=HomeworkCb(action="grade", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
+    kb.button(text="⬅ Назад к уроку", callback_data=HomeworkCb(action="back", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
     kb.adjust(1)
     return kb.as_markup()

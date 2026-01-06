@@ -7,6 +7,7 @@ from ..models import User, Role, Parent, ParentStudent, Student, Lesson, LessonS
 from ..callbacks import MenuCb, ChildCb
 from ..keyboards import parent_children_kb
 from ..utils_time import fmt_dt_for_tz
+from ..services.homework import homework_avg_last_n
 
 router = Router()
 
@@ -46,24 +47,38 @@ async def parent_child_schedule(call: CallbackQuery, callback_data: ChildCb, ses
 
     student = (await session.execute(select(Student).where(Student.id == callback_data.student_id))).scalar_one()
 
+    # средняя оценка ДЗ за последние N (по умолчанию 10)
+    avg = await homework_avg_last_n(session, student.id, n=10)
+    if avg is None:
+        avg_line = "Средняя оценка ДЗ (последние 10): нет данных\n"
+    else:
+        avg_line = f"Средняя оценка ДЗ (последние 10): {avg:.2f}/10\n"
+
     now = datetime.now(timezone.utc)
     horizon = now + timedelta(days=7)
 
     lessons = (await session.execute(
         select(Lesson)
-        .where(Lesson.student_id == student.id, Lesson.status == LessonStatus.planned,
-               Lesson.start_at >= now, Lesson.start_at <= horizon)
+        .where(
+            Lesson.student_id == student.id,
+            Lesson.status == LessonStatus.planned,
+            Lesson.start_at >= now,
+            Lesson.start_at <= horizon
+        )
         .order_by(Lesson.start_at)
     )).scalars().all()
 
     if not lessons:
-        await call.message.edit_text(f"{student.full_name}\nНа ближайшие 7 дней уроков нет.")
+        await call.message.edit_text(f"{student.full_name}\n{avg_line}\nНа ближайшие 7 дней уроков нет.")
         await call.answer()
         return
 
+    tzname = user.timezone or "Europe/Moscow"
     lines = []
     for l in lessons:
-        lines.append(f"- {fmt_dt_for_tz(l.start_at, user.timezone)} ({user.timezone})")
+        lines.append(f"- {fmt_dt_for_tz(l.start_at, tzname)} ({tzname})")
 
-    await call.message.edit_text(f"{student.full_name}\nУроки (7 дней):\n" + "\n".join(lines))
+    await call.message.edit_text(
+        f"{student.full_name}\n{avg_line}\nУроки (7 дней):\n" + "\n".join(lines)
+    )
     await call.answer()

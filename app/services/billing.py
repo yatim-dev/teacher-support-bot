@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert
 
 from ..models import (
     Lesson, LessonStatus, Student, BillingMode,
@@ -87,3 +88,25 @@ async def mark_charge_paid(session, charge_id: int):
         .values(status=ChargeStatus.paid, paid_at=now)
     )
     await session.commit()
+
+
+async def add_subscription_package(session, student_id: int, lessons: int) -> int:
+    if lessons not in (8, 12):
+        raise ValueError("Пакет может быть только 8 или 12 уроков")
+
+    st = (await session.execute(select(Student).where(Student.id == student_id))).scalar_one()
+    if st.billing_mode != BillingMode.subscription:
+        raise ValueError("Пополнение пакетом доступно только для subscription")
+
+    stmt = insert(StudentBalance).values(student_id=student_id, lessons_left=lessons)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[StudentBalance.student_id],   # PK
+        set_={"lessons_left": StudentBalance.lessons_left + lessons},
+    )
+    await session.execute(stmt)
+    await session.commit()
+
+    bal = (await session.execute(
+        select(StudentBalance).where(StudentBalance.student_id == student_id)
+    )).scalar_one()
+    return bal.lessons_left

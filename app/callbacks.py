@@ -40,3 +40,8 @@ class HomeworkCb(CallbackData, prefix="hw"):
     lesson_id: int
     student_id: int
     offset: int = 0
+
+class SubCb(CallbackData, prefix="sub"):
+    action: str            # "add"
+    student_id: int
+    qty: int

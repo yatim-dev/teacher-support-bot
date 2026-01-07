@@ -258,12 +258,11 @@ async def test_lesson_action_delete_series_deletes_future_lessons_and_rule(sessi
 
 
 @pytest.mark.asyncio
-async def test_lesson_action_done_single_creates_charge_and_shows_charge_kb(session):
+async def test_lesson_action_done_single_creates_charge_and_shows_pay_button(session):
     import app.handlers.lesson_actions as la
 
     teacher = await create_teacher(session, tg_id=6007)
 
-    # родитель, чтобы mark_lesson_done мог отправить сообщения; бот фейковый
     parent_user = User(tg_id=70070, role=Role.parent, name="P", timezone="Europe/Moscow")
     session.add(parent_user)
     await session.flush()
@@ -271,34 +270,51 @@ async def test_lesson_action_done_single_creates_charge_and_shows_charge_kb(sess
     st = Student(full_name="S", timezone="Europe/Moscow", billing_mode=BillingMode.single, price_per_lesson=1000)
     session.add(st)
     await session.flush()
+    st_id = st.id
 
     p = Parent(user_id=parent_user.id, full_name="Parent")
     session.add(p)
     await session.flush()
-    session.add(ParentStudent(parent_id=p.id, student_id=st.id))
+    session.add(ParentStudent(parent_id=p.id, student_id=st_id))
 
-    l = Lesson(student_id=st.id, start_at=datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc), duration_min=60, status=LessonStatus.planned)
+    l = Lesson(
+        student_id=st_id,
+        start_at=datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc),
+        duration_min=60,
+        status=LessonStatus.planned,
+        source_rule_id=None,
+    )
     session.add(l)
     await session.commit()
+    lesson_id = l.id
 
     msg = FakeMessage(FakeFromUser(teacher.tg_id))
     call = FakeCallbackQuery(from_user=msg.from_user, message=msg)
     bot = FakeBot()
 
-    cb = LessonCb(action="done", lesson_id=l.id, student_id=st.id, offset=0)
+    cb = LessonCb(action="done", lesson_id=lesson_id, student_id=st_id, offset=0)
     await la.lesson_action(call, cb, session, bot=bot)
 
-    assert "Создано начисление" in msg.edits[-1][0]
-    assert msg.edits[-1][1].get("reply_markup") is not None
-
     # charge создан
-    ch = (await session.execute(select(LessonCharge).where(LessonCharge.lesson_id == l.id))).scalar_one()
+    ch = (await session.execute(select(LessonCharge).where(LessonCharge.lesson_id == lesson_id))).scalar_one()
     assert ch.status == ChargeStatus.pending
+
+    # карточка перерисована, статус "не оплачено"
+    assert msg.edits
+    text, kwargs = msg.edits[-1]
+    assert "не оплачено" in text.lower()
+
+    # есть кнопка "Урок оплачен"
+    markup = kwargs.get("reply_markup")
+    assert markup is not None
+    all_cb = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+    assert ChargeCb(action="paid", charge_id=ch.id).pack() in all_cb
+
     assert bot.sent  # родителю отправили сообщение
 
 
 @pytest.mark.asyncio
-async def test_charge_paid_marks_paid(session):
+async def test_charge_paid_marks_paid_and_rerenders_cards(session):
     import app.handlers.lesson_actions as la
 
     teacher = await create_teacher(session, tg_id=6008)
@@ -306,23 +322,35 @@ async def test_charge_paid_marks_paid(session):
     st = Student(full_name="S", timezone="Europe/Moscow", billing_mode=BillingMode.single, price_per_lesson=1000)
     session.add(st)
     await session.flush()
+    st_id = st.id
 
-    l = Lesson(student_id=st.id, start_at=datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc), duration_min=60, status=LessonStatus.done)
+    l = Lesson(
+        student_id=st_id,
+        start_at=datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc),
+        duration_min=60,
+        status=LessonStatus.done,
+        source_rule_id=None,
+    )
     session.add(l)
     await session.flush()
 
-    ch = LessonCharge(lesson_id=l.id, student_id=st.id, amount=1000.0, status=ChargeStatus.pending)
+    ch = LessonCharge(lesson_id=l.id, student_id=st_id, amount=1000.0, status=ChargeStatus.pending)
     session.add(ch)
     await session.commit()
+    ch_id = ch.id
 
     msg = FakeMessage(FakeFromUser(teacher.tg_id))
     call = FakeCallbackQuery(from_user=msg.from_user, message=msg)
 
-    await la.charge_paid(call, ChargeCb(action="paid", charge_id=ch.id), session)
+    await la.charge_paid(call, ChargeCb(action="paid", charge_id=ch_id), session)
 
-    ch2 = (await session.execute(select(LessonCharge).where(LessonCharge.id == ch.id))).scalar_one()
+    ch2 = (await session.execute(select(LessonCharge).where(LessonCharge.id == ch_id))).scalar_one()
     assert ch2.status == ChargeStatus.paid
-    assert msg.edits[-1][0] == "Оплата отмечена."
+
+    # после оплаты идет render_lesson_card; если других уроков нет — будет "Ближайших уроков нет."
+    assert msg.edits
+    assert msg.edits[-1][0] in ("Ближайших уроков нет.",) or ("Урок:" in msg.edits[-1][0])
+
 
 
 # ---------- Homework flow ----------

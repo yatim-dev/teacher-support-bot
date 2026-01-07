@@ -5,11 +5,12 @@ from aiogram.types import CallbackQuery
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy import select, update, delete
+from sqlalchemy import select, update, delete, or_, and_, exists
 
 from ..models import (
     User, Role, Lesson, LessonStatus, Student, ScheduleRule,
-    Homework, ParentStudent, Parent, Notification, NotificationStatus
+    Homework, ParentStudent, Parent, Notification, NotificationStatus,
+    LessonCharge, ChargeStatus
 )
 from ..callbacks import LessonCb, AdminCb, ChargeCb, HomeworkCb
 from ..keyboards import lesson_actions_kb, student_card_kb, charge_paid_kb, homework_kb
@@ -29,9 +30,23 @@ def ensure_teacher(user: User):
 
 
 async def render_lesson_card(call: CallbackQuery, session, student_id: int, offset: int):
+    # done-уроки показываем только если есть pending начисление
+    unpaid_exists = exists(
+        select(1).where(
+            LessonCharge.lesson_id == Lesson.id,
+            LessonCharge.status == ChargeStatus.pending
+        )
+    )
+
     lessons = (await session.execute(
         select(Lesson)
-        .where(Lesson.student_id == student_id, Lesson.status == LessonStatus.planned)
+        .where(
+            Lesson.student_id == student_id,
+            or_(
+                Lesson.status == LessonStatus.planned,
+                and_(Lesson.status == LessonStatus.done, unpaid_exists),
+            )
+        )
         .order_by(Lesson.start_at)
         .offset(offset)
         .limit(1)
@@ -47,15 +62,34 @@ async def render_lesson_card(call: CallbackQuery, session, student_id: int, offs
     when = fmt_dt_for_tz(lesson.start_at, st.timezone)
     is_recurring = lesson.source_rule_id is not None
 
+    # если урок done и он попал в выборку, значит он "не оплачен" -> найдём charge_id
+    charge_id = None
+    status_text = "planned"
+    if lesson.status == LessonStatus.done:
+        status_text = "done (не оплачено)"
+        ch = (await session.execute(
+            select(LessonCharge).where(
+                LessonCharge.lesson_id == lesson.id,
+                LessonCharge.status == ChargeStatus.pending
+            )
+        )).scalar_one_or_none()
+        charge_id = ch.id if ch else None
+
     text = (
         f"{st.full_name}\n"
         f"Урок: {when} ({st.timezone})\n"
         f"Тип: {'еженедельное' if is_recurring else 'разовое'}\n"
-        f"Статус: planned"
+        f"Статус: {status_text}"
     )
+
     await call.message.edit_text(
         text,
-        reply_markup=lesson_actions_kb(lesson.id, student_id, offset, is_recurring=is_recurring)
+        reply_markup=lesson_actions_kb(
+            lesson.id, student_id, offset,
+            is_recurring=is_recurring,
+            charge_id=charge_id,
+            show_done=(lesson.status == LessonStatus.planned),
+        )
     )
 
 
@@ -145,11 +179,12 @@ async def lesson_action(call: CallbackQuery, callback_data: LessonCb, session, b
         return
 
     if callback_data.action == "done":
-        charge_id = await mark_lesson_done(session, bot, callback_data.lesson_id)
-        if charge_id:
-            await call.message.edit_text("Урок проведён. Создано начисление.", reply_markup=charge_paid_kb(charge_id))
-        else:
-            await call.message.edit_text("Урок проведён (абонемент).", reply_markup=student_card_kb(student_id))
+        await mark_lesson_done(session, bot, callback_data.lesson_id)
+
+        # перерисовываем карточку урока на том же offset
+        # (если single — появится "Урок оплачен", если subscription — урок исчезнет)
+        await render_lesson_card(call, session, student_id=student_id, offset=offset)
+
         await call.answer()
         return
 
@@ -159,8 +194,19 @@ async def charge_paid(call: CallbackQuery, callback_data: ChargeCb, session):
     user = (await session.execute(select(User).where(User.tg_id == call.from_user.id))).scalar_one()
     ensure_teacher(user)
 
+    # 1) узнаём ученика по начислению
+    ch = (await session.execute(
+        select(LessonCharge).where(LessonCharge.id == callback_data.charge_id)
+    )).scalar_one()
+    student_id = ch.student_id
+
+    # 2) отмечаем оплату
     await mark_charge_paid(session, callback_data.charge_id)
-    await call.message.edit_text("Оплата отмечена.", reply_markup=None)
+
+    # 3) перерисовываем карточку урока
+    # после оплаты текущий урок выпадет из списка (done+paid), покажется следующий
+    await render_lesson_card(call, session, student_id=student_id, offset=0)
+
     await call.answer()
 
 async def render_homework(call: CallbackQuery, session, lesson_id: int, student_id: int, offset: int):

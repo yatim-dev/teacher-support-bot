@@ -1,9 +1,10 @@
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton
 
 from .callbacks import (
     MenuCb, AdminCb, LessonCb, ChargeCb,
-    TzCb, ChildCb, FsmNavCb, HomeworkCb, SubCb
+    TzCb, ChildCb, FsmNavCb, HomeworkCb, SubCb, BoardCb
 )
 
 TZ_LIST = [
@@ -52,11 +53,22 @@ def admin_menu() -> InlineKeyboardMarkup:
 
 def students_list_kb(rows: list[tuple[int, str]], page: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+
+    # ученики — каждый на своей строке
     for sid, name in rows:
-        kb.button(text=name, callback_data=AdminCb(action="student", student_id=sid).pack())
-    kb.button(text="◀", callback_data=AdminCb(action="students", page=max(1, page - 1)).pack())
-    kb.button(text="▶", callback_data=AdminCb(action="students", page=page + 1).pack())
-    kb.adjust(1, 2)
+        kb.row(
+            InlineKeyboardButton(
+                text=name,
+                callback_data=AdminCb(action="student", student_id=sid).pack()
+            )
+        )
+
+    # стрелки — всегда одной строкой внизу
+    kb.row(
+        InlineKeyboardButton(text="◀", callback_data=AdminCb(action="students", page=max(1, page - 1)).pack()),
+        InlineKeyboardButton(text="▶", callback_data=AdminCb(action="students", page=page + 1).pack()),
+    )
+
     return kb.as_markup()
 
 
@@ -72,10 +84,11 @@ def student_card_kb(student_id: int, *, show_subscription: bool = False) -> Inli
     kb.button(text="Ключ для ученика", callback_data=AdminCb(action="keys_student", student_id=student_id).pack())
     kb.button(text="Ключ для родителя", callback_data=AdminCb(action="keys_parent", student_id=student_id).pack())
     kb.button(text="Ближайшие уроки", callback_data=AdminCb(action="lessons", student_id=student_id).pack())
+    kb.button(text="Ссылка на доску", callback_data=BoardCb(action="edit", student_id=student_id).pack())
     kb.button(text="Удалить ученика", callback_data=AdminCb(action="student_delete", student_id=student_id).pack())
     kb.button(text="Назад к списку", callback_data=AdminCb(action="students", page=1).pack())
 
-    kb.adjust(1, 2, 1, 1, 1, 1, 1)
+    kb.adjust(1, 2, 1, 1, 1, 1, 1, 1)
     return kb.as_markup()
 
 

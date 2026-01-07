@@ -16,6 +16,7 @@ router = Router()
 class CreateStudentFSM(StatesGroup):
     full_name = State()
     tz = State()
+    board_url = State()
     billing = State()
     price = State()
 
@@ -56,8 +57,16 @@ async def create_student_tz(message: Message, state: FSMContext, session):
         return
 
     await state.update_data(tz=tz)
-    await state.set_state(CreateStudentFSM.billing)
-    await message.answer("Выберите тариф: subscription или single (сообщением).")
+
+    # ВАЖНО: дальше идём на ввод ссылки, а не на тариф
+    await state.set_state(CreateStudentFSM.board_url)
+    await message.answer(
+        "Введите ссылку на доску (Miro/Google/...)\n"
+        "Формат: https://...\n"
+        "Если не нужна — отправьте '-'"
+    )
+    return
+
 
 
 @router.message(CreateStudentFSM.billing)
@@ -105,6 +114,7 @@ async def finalize_student(message: Message, state: FSMContext, session):
     st = Student(
         full_name=data["full_name"],
         timezone=data["tz"],
+        board_url=data.get("board_url"),
         billing_mode=billing_mode,
         price_per_lesson=price if billing_mode == BillingMode.single else None
     )
@@ -117,3 +127,20 @@ async def finalize_student(message: Message, state: FSMContext, session):
         f"ID: {st.id}\n\n"
         f"Дальше: /menu → Админка → Ученики → выберите ученика."
     )
+
+@router.message(CreateStudentFSM.board_url)
+async def create_student_board_url(message: Message, state: FSMContext, session):
+    user = await get_user(session, message.from_user.id)
+    ensure_teacher(user)
+
+    txt = (message.text or "").strip()
+    if txt in ("", "-", "—"):
+        await state.update_data(board_url=None)
+    else:
+        if not (txt.startswith("http://") or txt.startswith("https://")):
+            await message.answer("Ссылка должна начинаться с http:// или https://. Повторите или отправьте '-'.")
+            return
+        await state.update_data(board_url=txt)
+
+    await state.set_state(CreateStudentFSM.billing)
+    await message.answer("Выберите тариф: subscription или single (сообщением).")

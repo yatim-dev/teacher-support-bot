@@ -67,6 +67,7 @@ class Student(Base):
     )
 
     full_name: Mapped[str] = mapped_column(String(255))
+    board_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     timezone: Mapped[str] = mapped_column(String(64), default="Europe/Moscow")
 
     billing_mode: Mapped[BillingMode] = mapped_column(Enum(BillingMode), default=BillingMode.subscription)

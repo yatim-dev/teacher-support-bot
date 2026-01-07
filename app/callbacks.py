@@ -45,3 +45,7 @@ class SubCb(CallbackData, prefix="sub"):
     action: str            # "add"
     student_id: int
     qty: int
+
+class BoardCb(CallbackData, prefix="b"):
+    action: str        # "edit"
+    student_id: int

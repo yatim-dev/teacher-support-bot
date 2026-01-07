@@ -1,8 +1,10 @@
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardMarkup
 
-from .callbacks import MenuCb, AdminCb, LessonCb, ChargeCb, TzCb, ChildCb, FsmNavCb, HomeworkCb
-
+from .callbacks import (
+    MenuCb, AdminCb, LessonCb, ChargeCb,
+    TzCb, ChildCb, FsmNavCb, HomeworkCb, SubCb
+)
 
 TZ_LIST = [
     "Europe/Moscow",
@@ -58,15 +60,22 @@ def students_list_kb(rows: list[tuple[int, str]], page: int) -> InlineKeyboardMa
     return kb.as_markup()
 
 
-def student_card_kb(student_id: int) -> InlineKeyboardMarkup:
+def student_card_kb(student_id: int, *, show_subscription: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+
     kb.button(text="Добавить занятие", callback_data=AdminCb(action="lessons_add", student_id=student_id).pack())
+
+    if show_subscription:
+        kb.button(text="Абонемент +8", callback_data=SubCb(action="add", student_id=student_id, qty=8).pack())
+        kb.button(text="Абонемент +12", callback_data=SubCb(action="add", student_id=student_id, qty=12).pack())
+
     kb.button(text="Ключ для ученика", callback_data=AdminCb(action="keys_student", student_id=student_id).pack())
     kb.button(text="Ключ для родителя", callback_data=AdminCb(action="keys_parent", student_id=student_id).pack())
     kb.button(text="Ближайшие уроки", callback_data=AdminCb(action="lessons", student_id=student_id).pack())
     kb.button(text="Удалить ученика", callback_data=AdminCb(action="student_delete", student_id=student_id).pack())
     kb.button(text="Назад к списку", callback_data=AdminCb(action="students", page=1).pack())
-    kb.adjust(1)
+
+    kb.adjust(1, 2, 1, 1, 1, 1, 1)
     return kb.as_markup()
 
 
@@ -154,4 +163,11 @@ def homework_kb(lesson_id: int, student_id: int, offset: int) -> InlineKeyboardM
     kb.button(text="✅ Поставить оценку", callback_data=HomeworkCb(action="grade", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
     kb.button(text="⬅ Назад к уроку", callback_data=HomeworkCb(action="back", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
     kb.adjust(1)
+    return kb.as_markup()
+
+def subscription_packages_kb(student_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Абонемент +8", callback_data=SubCb(action="add", student_id=student_id, qty=8).pack())
+    kb.button(text="Абонемент +12", callback_data=SubCb(action="add", student_id=student_id, qty=12).pack())
+    kb.adjust(2)
     return kb.as_markup()

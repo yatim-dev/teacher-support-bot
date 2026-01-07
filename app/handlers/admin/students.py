@@ -6,7 +6,7 @@ from aiogram.types import CallbackQuery
 
 from sqlalchemy import select
 
-from ...models import User, Role, Student, RegistrationKey
+from ...models import User, Role, Student, RegistrationKey, BillingMode, StudentBalance
 from ...callbacks import AdminCb
 from ...keyboards import students_list_kb, student_card_kb
 from .common import get_user, ensure_teacher
@@ -41,10 +41,21 @@ async def admin_student_card(call: CallbackQuery, callback_data: AdminCb, sessio
 
     st = (await session.execute(select(Student).where(Student.id == callback_data.student_id))).scalar_one()
 
+    left_line = ""
+    show_sub_buttons = False
+    if st.billing_mode == BillingMode.subscription:
+        bal = (await session.execute(
+            select(StudentBalance).where(StudentBalance.student_id == st.id)
+        )).scalar_one_or_none()
+        left = bal.lessons_left if bal else 0
+        left_line = f"Осталось уроков: {left}\n"
+        show_sub_buttons = True
+
     txt = (
         f"Ученик: {st.full_name}\n"
         f"TZ ученика: {st.timezone}\n"
         f"Тариф: {st.billing_mode.value}\n"
+        f"{left_line}"
         f"Цена за урок (если single): {st.price_per_lesson or '-'}\n"
         f"Зарегистрирован: {'да' if st.user_id else 'нет'}\n\n"
         "Дальше:\n"
@@ -52,7 +63,11 @@ async def admin_student_card(call: CallbackQuery, callback_data: AdminCb, sessio
         "2) Сгенерировать ключи (ученик/родитель)\n"
         "3) Проверить ближайшие уроки"
     )
-    await call.message.edit_text(txt, reply_markup=student_card_kb(st.id))
+
+    await call.message.edit_text(
+        txt,
+        reply_markup=student_card_kb(st.id, show_subscription=(st.billing_mode == BillingMode.subscription))
+    )
     await call.answer()
 
 

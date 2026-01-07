@@ -60,7 +60,7 @@ def students_list_kb(rows: list[tuple[int, str]], page: int) -> InlineKeyboardMa
 
 def student_card_kb(student_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="Добавить занятие", callback_data=AdminCb(action="lesson_add", student_id=student_id).pack())
+    kb.button(text="Добавить занятие", callback_data=AdminCb(action="lessons_add", student_id=student_id).pack())
     kb.button(text="Ключ для ученика", callback_data=AdminCb(action="keys_student", student_id=student_id).pack())
     kb.button(text="Ключ для родителя", callback_data=AdminCb(action="keys_parent", student_id=student_id).pack())
     kb.button(text="Ближайшие уроки", callback_data=AdminCb(action="lessons", student_id=student_id).pack())

@@ -6,7 +6,7 @@ class MenuCb(CallbackData, prefix="m"):
 
 
 class AdminCb(CallbackData, prefix="a"):
-    action: str  # students|student|create_student|lesson_add|add_rule|keys_student|keys_parent|lessons
+    action: str  # students|student|create_student|lessons_add|add_rule|keys_student|keys_parent|lessons
     student_id: int | None = None
     page: int = 1
 

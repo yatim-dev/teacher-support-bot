@@ -88,26 +88,57 @@ def add_lesson_type_kb(student_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def lesson_actions_kb(lesson_id: int, student_id: int, offset: int, is_recurring: bool) -> InlineKeyboardMarkup:
+def lesson_actions_kb(lesson_id: int, student_id: int, offset: int, is_recurring: bool, *,
+    charge_id: int | None = None,
+    show_done: bool = True,
+) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
 
-    kb.button(text="Проведён", callback_data=LessonCb(action="done", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
-    kb.button(text="Отменить", callback_data=LessonCb(action="cancel", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
+    # Верхние действия
+    if show_done:
+        kb.button(
+            text="Проведён",
+            callback_data=LessonCb(action="done", lesson_id=lesson_id, student_id=student_id, offset=offset).pack()
+        )
 
+    kb.button(
+        text="Отменить",
+        callback_data=LessonCb(action="cancel", lesson_id=lesson_id, student_id=student_id, offset=offset).pack()
+    )
+
+    # Кнопка оплаты появляется только если есть pending charge
+    if charge_id is not None:
+        kb.button(
+            text="Урок оплачен",
+            callback_data=ChargeCb(action="paid", charge_id=charge_id).pack()
+        )
+
+    # Навигация
     kb.button(text="◀", callback_data=LessonCb(action="prev", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
     kb.button(text="▶", callback_data=LessonCb(action="next", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
 
+    # Домашка
     kb.button(
         text="Домашнее задание",
         callback_data=HomeworkCb(action="view", lesson_id=lesson_id, student_id=student_id, offset=offset).pack()
     )
 
     if is_recurring:
-        kb.button(text="Удалить цикл", callback_data=LessonCb(action="delete_series", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
+        kb.button(
+            text="Удалить цикл",
+            callback_data=LessonCb(action="delete_series", lesson_id=lesson_id, student_id=student_id, offset=offset).pack()
+        )
 
     kb.button(text="Назад", callback_data=AdminCb(action="student", student_id=student_id).pack())
 
-    kb.adjust(2, 2, 1, 1, 1)
+    # Раскладка:
+    # - если show_done и charge_id есть: получится 3 кнопки вверху -> делаем (2,1)
+    # - иначе (2)
+    if show_done and charge_id is not None:
+        kb.adjust(2, 1, 2, 1, 1, 1)
+    else:
+        kb.adjust(2, 2, 1, 1, 1)
+
     return kb.as_markup()
 
 

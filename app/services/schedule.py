@@ -9,17 +9,30 @@ from ..models import ScheduleRule, Student, Lesson, LessonStatus
 
 HORIZON_DAYS = 60
 
+
 def _date_range(start: date, end: date):
     d = start
     while d <= end:
         yield d
         d += timedelta(days=1)
 
+
 def _to_utc(student_tz: str, d: date, t_local) -> datetime:
-    local_dt = datetime(d.year, d.month, d.day, t_local.hour, t_local.minute, t_local.second, tzinfo=ZoneInfo(student_tz))
+    local_dt = datetime(
+        d.year, d.month, d.day,
+        t_local.hour, t_local.minute, t_local.second,
+        tzinfo=ZoneInfo(student_tz)
+    )
     return local_dt.astimezone(timezone.utc)
 
-async def generate_lessons_for_student(session, student_id: int):
+
+async def generate_lessons_for_student(
+    session,
+    student_id: int,
+    *,
+    now_utc: datetime | None = None,
+    horizon_days: int = HORIZON_DAYS,
+) -> int:
     # студент и его TZ
     st = (await session.execute(select(Student).where(Student.id == student_id))).scalar_one()
 
@@ -30,9 +43,14 @@ async def generate_lessons_for_student(session, student_id: int):
     if not rules:
         return 0
 
-    now_utc = datetime.now(timezone.utc)
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    elif now_utc.tzinfo is None:
+        # чтобы не было сюрпризов в тестах/проде
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+
     start_day = now_utc.date()
-    end_day = (now_utc + timedelta(days=HORIZON_DAYS)).date()
+    end_day = (now_utc + timedelta(days=horizon_days)).date()
 
     rows = []
     for r in rules:
@@ -56,6 +74,7 @@ async def generate_lessons_for_student(session, student_id: int):
 
     stmt = insert(Lesson).values(rows)
     stmt = stmt.on_conflict_do_nothing(index_elements=["student_id", "start_at"])
-    result = await session.execute(stmt)
-    # result.rowcount в asyncpg может быть None; поэтому возвращаем len(rows) как "пытались вставить"
+    await session.execute(stmt)
+
+    # как и было: "сколько пытались вставить"
     return len(rows)

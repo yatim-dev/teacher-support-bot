@@ -176,11 +176,17 @@ async def test_create_student_full_flow_subscription(session):
     assert state.state == cs_mod.CreateStudentFSM.tz
     assert "Выберите TZ ученика" in msg1.answers[-1][0]
 
-    # tz
+    # tz -> теперь спрашиваем ссылку на доску
     msg2 = FakeMessage(FakeFromUser(teacher.tg_id), text="Europe/Moscow")
     await cs_mod.create_student_tz(msg2, state, session)
+    assert state.state == cs_mod.CreateStudentFSM.board_url
+    assert "ссылку на доску" in msg2.answers[-1][0].lower()
+
+    # board_url (можно '-' чтобы пропустить)
+    msg_board = FakeMessage(FakeFromUser(teacher.tg_id), text="-")
+    await cs_mod.create_student_board_url(msg_board, state, session)
     assert state.state == cs_mod.CreateStudentFSM.billing
-    assert "Выберите тариф" in msg2.answers[-1][0]
+    assert "Выберите тариф" in msg_board.answers[-1][0]
 
     # billing subscription -> finalize_student
     msg3 = FakeMessage(FakeFromUser(teacher.tg_id), text="subscription")
@@ -195,6 +201,7 @@ async def test_create_student_full_flow_subscription(session):
     assert st.timezone == "Europe/Moscow"
     assert st.billing_mode == BillingMode.subscription
     assert st.price_per_lesson is None
+    assert st.board_url is None
 
 
 @pytest.mark.asyncio

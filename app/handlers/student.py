@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from sqlalchemy import select
@@ -19,6 +20,10 @@ async def student_schedule(call: CallbackQuery, session):
         return
 
     student = (await session.execute(select(Student).where(Student.user_id == user.id))).scalar_one()
+
+    board_line = ""
+    if getattr(student, "board_url", None):
+        board_line = f"Ваша доска: {student.board_url}\n\n"
 
     # средняя оценка ДЗ за последние N (по умолчанию 10)
     avg = await homework_avg_last_n(session, student.id, n=10)
@@ -42,14 +47,12 @@ async def student_schedule(call: CallbackQuery, session):
     )).scalars().all()
 
     if not lessons:
-        await call.message.edit_text(avg_line + "На ближайшие 7 дней уроков нет.")
+        await call.message.edit_text(board_line + avg_line + "На ближайшие 7 дней уроков нет.")
         await call.answer()
         return
 
-    lines = []
     tzname = user.timezone or "Europe/Moscow"
-    for l in lessons:
-        lines.append(f"- {fmt_dt_for_tz(l.start_at, tzname)} ({tzname})")
+    lines = [f"- {fmt_dt_for_tz(l.start_at, tzname)} ({tzname})" for l in lessons]
 
-    await call.message.edit_text(avg_line + "Ваши уроки (7 дней):\n" + "\n".join(lines))
+    await call.message.edit_text(board_line + avg_line + "Ваши уроки (7 дней):\n" + "\n".join(lines))
     await call.answer()

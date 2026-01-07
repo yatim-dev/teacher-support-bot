@@ -43,6 +43,8 @@ async def admin_student_card(call: CallbackQuery, callback_data: AdminCb, sessio
         select(Student).where(Student.id == callback_data.student_id)
     )).scalar_one()
 
+    board_line = f"Доска: {st.board_url or '-'}\n"
+
     # subscription: остаток уроков
     left_line = ""
     show_sub_buttons = False
@@ -70,6 +72,7 @@ async def admin_student_card(call: CallbackQuery, callback_data: AdminCb, sessio
     txt = (
         f"Ученик: {st.full_name}\n"
         f"TZ ученика: {st.timezone}\n"
+        f"{board_line}"
         f"Тариф: {st.billing_mode.value}\n"
         f"{left_line}"
         f"{unpaid_line}"

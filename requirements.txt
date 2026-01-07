@@ -4,3 +4,6 @@ asyncpg==0.*
 APScheduler==3.*
 python-dotenv==1.*
 pydantic-settings==2.*
+pytest==8.*
+pytest-asyncio==0.23.*
+ruff==0.*

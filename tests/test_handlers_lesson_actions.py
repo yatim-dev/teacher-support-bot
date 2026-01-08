@@ -15,7 +15,7 @@ from app.models import (
     Notification, NotificationStatus,
     LessonCharge, ChargeStatus,
 )
-from app.callbacks import LessonCb, ChargeCb, HomeworkCb, AdminCb
+from app.callbacks import LessonCb, LessonPayCb, HomeworkCb, AdminCb
 
 
 # ---------- Fakes ----------
@@ -260,6 +260,7 @@ async def test_lesson_action_delete_series_deletes_future_lessons_and_rule(sessi
 @pytest.mark.asyncio
 async def test_lesson_action_done_single_creates_charge_and_shows_pay_button(session):
     import app.handlers.lesson_actions as la
+    from app.callbacks import LessonPayCb
 
     teacher = await create_teacher(session, tg_id=6007)
 
@@ -304,18 +305,19 @@ async def test_lesson_action_done_single_creates_charge_and_shows_pay_button(ses
     text, kwargs = msg.edits[-1]
     assert "не оплачено" in text.lower()
 
-    # есть кнопка "Урок оплачен"
+    # есть кнопка "Урок оплачен" (теперь по lesson_id, а не по charge_id)
     markup = kwargs.get("reply_markup")
     assert markup is not None
     all_cb = [btn.callback_data for row in markup.inline_keyboard for btn in row]
-    assert ChargeCb(action="paid", charge_id=ch.id).pack() in all_cb
+    assert LessonPayCb(action="paid", lesson_id=lesson_id, student_id=st_id, offset=0).pack() in all_cb
 
     assert bot.sent  # родителю отправили сообщение
 
 
 @pytest.mark.asyncio
-async def test_charge_paid_marks_paid_and_rerenders_cards(session):
+async def test_lesson_pay_paid_marks_paid_and_rerenders_cards(session):
     import app.handlers.lesson_actions as la
+    from app.callbacks import LessonPayCb
 
     teacher = await create_teacher(session, tg_id=6008)
 
@@ -334,22 +336,30 @@ async def test_charge_paid_marks_paid_and_rerenders_cards(session):
     session.add(l)
     await session.flush()
 
+    # pending charge уже есть
     ch = LessonCharge(lesson_id=l.id, student_id=st_id, amount=1000.0, status=ChargeStatus.pending)
     session.add(ch)
     await session.commit()
-    ch_id = ch.id
 
     msg = FakeMessage(FakeFromUser(teacher.tg_id))
     call = FakeCallbackQuery(from_user=msg.from_user, message=msg)
 
-    await la.charge_paid(call, ChargeCb(action="paid", charge_id=ch_id), session)
+    # оплата теперь отмечается по lesson_id
+    await la.lesson_pay_action(
+        call,
+        LessonPayCb(action="paid", lesson_id=l.id, student_id=st_id, offset=0),
+        session,
+    )
 
-    ch2 = (await session.execute(select(LessonCharge).where(LessonCharge.id == ch_id))).scalar_one()
+    ch2 = (await session.execute(select(LessonCharge).where(LessonCharge.lesson_id == l.id))).scalar_one()
     assert ch2.status == ChargeStatus.paid
+    assert ch2.paid_at is not None
 
-    # после оплаты идет render_lesson_card; если других уроков нет — будет "Ближайших уроков нет."
+    # после оплаты идёт render_lesson_card; если других уроков нет — будет "Ближайших уроков нет."
     assert msg.edits
-    assert msg.edits[-1][0] in ("Ближайших уроков нет.",) or ("Урок:" in msg.edits[-1][0])
+    last_text = msg.edits[-1][0]
+    assert (last_text == "Ближайших уроков нет.") or ("Урок:" in last_text)
+
 
 
 

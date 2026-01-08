@@ -10,7 +10,7 @@ from app.models import (
     User, Role,
     StudentBalance,
 )
-from app.callbacks import ChargeCb, LessonCb, AdminCb
+from app.callbacks import LessonPayCb, LessonCb, AdminCb
 
 
 # ----------------- fakes -----------------
@@ -80,7 +80,6 @@ async def test_render_lesson_card_shows_planned_without_pay_button(session, monk
     assert not any((cb or "").startswith("c:") for cb in cbs)
 
 
-@pytest.mark.asyncio
 async def test_render_lesson_card_shows_done_pending_with_pay_button_and_hides_done(session):
     import app.handlers.lesson_actions as mod
 
@@ -117,10 +116,10 @@ async def test_render_lesson_card_shows_done_pending_with_pay_button_and_hides_d
     markup = kwargs["reply_markup"]
     cbs = all_callback_data(markup)
 
-    # есть кнопка оплаты
-    assert ChargeCb(action="paid", charge_id=ch.id).pack() in cbs
+    # есть кнопка оплаты (теперь по lesson_id)
+    assert LessonPayCb(action="paid", lesson_id=lesson.id, student_id=st_id, offset=0).pack() in cbs
 
-    # "Проведён" скрыт (show_done=False)
+    # "Проведён" скрыт (show_done=False для done-урока)
     assert LessonCb(action="done", lesson_id=lesson.id, student_id=st_id, offset=0).pack() not in cbs
 
 
@@ -231,21 +230,19 @@ async def test_admin_student_card_shows_balance_for_subscription(session):
 
 
 @pytest.mark.asyncio
-async def test_charge_paid_marks_paid_and_lesson_disappears(session):
+async def test_lesson_pay_paid_marks_paid_and_lesson_disappears(session):
     import app.handlers.lesson_actions as mod
 
-    # teacher (для ensure_teacher)
+    # teacher (для ensure_teacher в lesson_pay_action)
     teacher = User(tg_id=7100, role=Role.teacher, name="T", timezone="Europe/Moscow")
     session.add(teacher)
     await session.flush()
 
-    # student single
     st = Student(full_name="S", timezone="Europe/Moscow", billing_mode=BillingMode.single, price_per_lesson=1000)
     session.add(st)
     await session.flush()
     st_id = st.id
 
-    # lesson done + pending charge
     lesson = Lesson(
         student_id=st_id,
         start_at=datetime(2026, 2, 1, 10, 0, tzinfo=timezone.utc),
@@ -265,15 +262,16 @@ async def test_charge_paid_marks_paid_and_lesson_disappears(session):
     await mod.render_lesson_card(call0, session, student_id=st_id, offset=0)
     text0, kwargs0 = call0.message.edits[-1]
     assert "не оплачено" in text0.lower()
-    assert ChargeCb(action="paid", charge_id=ch.id).pack() in all_callback_data(kwargs0["reply_markup"])
+    assert LessonPayCb(action="paid", lesson_id=lesson.id, student_id=st_id, offset=0).pack() in all_callback_data(kwargs0["reply_markup"])
 
-    # нажимаем "урок оплачен"
+    # нажимаем "урок оплачен" (по lesson_id)
     call1 = FakeCallbackQuery(user_id=teacher.tg_id)
-    await mod.charge_paid(call1, ChargeCb(action="paid", charge_id=ch.id), session)
+    await mod.lesson_pay_action(call1, LessonPayCb(action="paid", lesson_id=lesson.id, student_id=st_id, offset=0), session)
 
     # начисление стало paid
-    ch_db = (await session.execute(select(LessonCharge).where(LessonCharge.id == ch.id))).scalar_one()
+    ch_db = (await session.execute(select(LessonCharge).where(LessonCharge.lesson_id == lesson.id))).scalar_one()
     assert ch_db.status == ChargeStatus.paid
+    assert ch_db.paid_at is not None
 
     # теперь render_lesson_card должен сказать "Ближайших уроков нет."
     call2 = FakeCallbackQuery(user_id=teacher.tg_id)

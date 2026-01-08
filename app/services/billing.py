@@ -38,18 +38,26 @@ async def mark_lesson_done(session, bot, lesson_id: int) -> int | None:
         await session.commit()
         return None
 
-    # single -> начисление + уведомление родителям
+    # single -> начисление (если ещё не было) + уведомление родителям
     if not student.price_per_lesson:
         raise ValueError("Для single нужен price_per_lesson у ученика")
 
-    charge = LessonCharge(
-        lesson_id=lesson.id,
-        student_id=student.id,
-        amount=float(student.price_per_lesson),
-        status=ChargeStatus.pending
-    )
-    session.add(charge)
-    await session.flush()
+    # если оплатили заранее (или уже есть pending) — не создаём новый charge
+    existing = (await session.execute(
+        select(LessonCharge).where(LessonCharge.lesson_id == lesson.id)
+    )).scalar_one_or_none()
+
+    if existing is None:
+        charge = LessonCharge(
+            lesson_id=lesson.id,
+            student_id=student.id,
+            amount=float(student.price_per_lesson),
+            status=ChargeStatus.pending
+        )
+        session.add(charge)
+        await session.flush()
+    else:
+        charge = existing  # pending или paid
 
     # всем родителям
     parent_ids = (await session.execute(
@@ -68,16 +76,28 @@ async def mark_lesson_done(session, bot, lesson_id: int) -> int | None:
         for pu in parent_users:
             when = fmt_dt_for_tz(lesson.start_at, pu.timezone)
             tzname = pu.timezone or "Europe/Moscow"
-            text = (
-                f"Урок проведён.\n"
-                f"Ученик: {student.full_name}\n"
-                f"Дата/время: {when} ({tzname})\n"
-                f"К оплате: {charge.amount}"
-            )
+
+            if charge.status == ChargeStatus.paid:
+                text = (
+                    f"Урок проведён.\n"
+                    f"Ученик: {student.full_name}\n"
+                    f"Дата/время: {when} ({tzname})\n"
+                    f"Оплата: отмечена"
+                )
+            else:
+                text = (
+                    f"Урок проведён.\n"
+                    f"Ученик: {student.full_name}\n"
+                    f"Дата/время: {when} ({tzname})\n"
+                    f"К оплате: {charge.amount}"
+                )
+
             await bot.send_message(pu.tg_id, text)
 
     await session.commit()
-    return charge.id
+
+    # Возвращаем charge.id только если он pending (может пригодиться, но в новой схеме не обязательно)
+    return charge.id if charge.status == ChargeStatus.pending else None
 
 
 async def mark_charge_paid(session, charge_id: int):
@@ -110,3 +130,36 @@ async def add_subscription_package(session, student_id: int, lessons: int) -> in
         select(StudentBalance).where(StudentBalance.student_id == student_id)
     )).scalar_one()
     return bal.lessons_left
+
+async def mark_lesson_paid_anytime(session, lesson_id: int) -> int:
+    lesson = (await session.execute(select(Lesson).where(Lesson.id == lesson_id))).scalar_one()
+    student = (await session.execute(select(Student).where(Student.id == lesson.student_id))).scalar_one()
+
+    if student.billing_mode != BillingMode.single:
+        raise ValueError("Отмечать оплату вручную можно только для тарифа single")
+
+    if not student.price_per_lesson:
+        raise ValueError("Для single нужен price_per_lesson у ученика")
+
+    now = datetime.now(timezone.utc)
+
+    # 1) гарантируем, что charge существует
+    ins = insert(LessonCharge).values(
+        lesson_id=lesson.id,
+        student_id=student.id,
+        amount=float(student.price_per_lesson),
+        status=ChargeStatus.paid,
+        paid_at=now,
+    )
+
+    # если charge уже есть — просто ставим paid
+    stmt = ins.on_conflict_do_update(
+        index_elements=[LessonCharge.lesson_id],  # важно: должен быть unique/pk по lesson_id
+        set_={"status": ChargeStatus.paid, "paid_at": now},
+    )
+
+    await session.execute(stmt)
+    await session.commit()
+
+    ch = (await session.execute(select(LessonCharge).where(LessonCharge.lesson_id == lesson.id))).scalar_one()
+    return ch.id

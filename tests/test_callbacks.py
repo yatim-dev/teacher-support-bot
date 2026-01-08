@@ -1,4 +1,4 @@
-from app.callbacks import MenuCb, AdminCb, LessonCb, ChargeCb, ChildCb, TzCb, FsmNavCb, HomeworkCb
+from app.callbacks import MenuCb, AdminCb, LessonCb, LessonPayCb, ChildCb, TzCb, FsmNavCb, HomeworkCb
 
 
 def test_menu_cb_roundtrip():
@@ -27,12 +27,14 @@ def test_lesson_cb_roundtrip():
     assert restored.offset == 3
 
 
-def test_charge_cb_roundtrip():
-    cb = ChargeCb(action="paid", charge_id=7)
+def test_lesson_pay_cb_roundtrip():
+    cb = LessonPayCb(action="paid", lesson_id=7, student_id=10, offset=3)
     packed = cb.pack()
-    restored = ChargeCb.unpack(packed)
+    restored = LessonPayCb.unpack(packed)
     assert restored.action == "paid"
-    assert restored.charge_id == 7
+    assert restored.lesson_id == 7
+    assert restored.student_id == 10
+    assert restored.offset == 3
 
 
 def test_child_cb_roundtrip():

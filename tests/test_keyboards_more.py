@@ -5,13 +5,12 @@ from app.keyboards import (
     students_list_kb,
     student_card_kb,
     lesson_actions_kb,
-    charge_paid_kb,
     parent_children_kb,
     after_rule_added_kb, after_single_added_kb,
     student_delete_confirm_kb,
     homework_kb,
 )
-from app.callbacks import TzCb, AdminCb, LessonCb, ChargeCb, ChildCb, HomeworkCb
+from app.callbacks import TzCb, AdminCb, LessonCb, LessonPayCb, ChildCb, HomeworkCb
 
 
 def _btns(markup: InlineKeyboardMarkup):
@@ -71,10 +70,16 @@ def test_lesson_actions_kb_has_delete_series_only_when_recurring():
     assert LessonCb(action="delete_series", lesson_id=10, student_id=20, offset=3).pack() in cbs2
 
 
-def test_charge_paid_kb_contains_paid_action():
-    kb = charge_paid_kb(charge_id=777)
-    cbs = _cbs(kb)
-    assert ChargeCb(action="paid", charge_id=777).pack() in cbs
+def test_lesson_actions_kb_pay_button_present_only_when_show_pay_true():
+    # show_pay=False -> кнопки оплаты нет
+    kb1 = lesson_actions_kb(lesson_id=10, student_id=20, offset=0, is_recurring=False, show_pay=False)
+    cbs1 = _cbs(kb1)
+    assert LessonPayCb(action="paid", lesson_id=10, student_id=20, offset=0).pack() not in cbs1
+
+    # show_pay=True -> кнопка оплаты есть
+    kb2 = lesson_actions_kb(lesson_id=10, student_id=20, offset=0, is_recurring=False, show_pay=True)
+    cbs2 = _cbs(kb2)
+    assert LessonPayCb(action="paid", lesson_id=10, student_id=20, offset=0).pack() in cbs2
 
 
 def test_parent_children_kb_contains_children():

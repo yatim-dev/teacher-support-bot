@@ -18,11 +18,6 @@ class LessonCb(CallbackData, prefix="l"):
     offset: int = 0
 
 
-class ChargeCb(CallbackData, prefix="c"):
-    action: str  # paid
-    charge_id: int
-
-
 class ChildCb(CallbackData, prefix="ch"):
     student_id: int
 
@@ -49,3 +44,9 @@ class SubCb(CallbackData, prefix="sub"):
 class BoardCb(CallbackData, prefix="b"):
     action: str        # "edit"
     student_id: int
+
+class LessonPayCb(CallbackData, prefix="lp"):
+    action: str  # paid
+    lesson_id: int
+    student_id: int
+    offset: int

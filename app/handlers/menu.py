@@ -15,14 +15,9 @@ async def get_user(session, tg_id: int) -> User:
     return (await session.execute(select(User).where(User.tg_id == tg_id))).scalar_one()
 
 
-@router.message(F.text.in_({"/menu", "Меню"}))
-async def menu(message: Message, session):
-    user = await get_user(session, message.from_user.id)
-    if not user.timezone:
-        await message.answer("Сначала выберите часовой пояс:", reply_markup=tz_kb())
-        return
+def _menu_text(user: User) -> str:
     if user.role.value == "teacher":
-        text = (
+        return (
             "Меню (Учитель)\n\n"
             "Рекомендуемый порядок:\n"
             "1) Админка → Создать ученика\n"
@@ -30,11 +25,47 @@ async def menu(message: Message, session):
             "3) Там же → Сгенерировать ключи ученика и родителя\n\n"
             "Часовой пояс влияет на время в напоминаниях."
         )
-    elif user.role.value == "student":
-        text = "Меню (Ученик)\n\nЗдесь можно посмотреть расписание. Напоминания придут автоматически."
+    if user.role.value == "student":
+        return "Меню (Ученик)\n\nЗдесь можно посмотреть расписание. Напоминания придут автоматически."
+    return "Меню (Родитель)\n\nВыберите ребёнка и смотрите расписание. Напоминания придут автоматически."
+
+
+async def show_menu(message: Message, session, user: User, *, edit: bool) -> None:
+    # если TZ не выбран — уводим в выбор TZ
+    if not user.timezone:
+        if edit:
+            await message.edit_text("Сначала выберите часовой пояс:", reply_markup=tz_kb())
+        else:
+            await message.answer("Сначала выберите часовой пояс:", reply_markup=tz_kb())
+        return
+
+    text = _menu_text(user)
+    markup = main_menu(user.role.value)
+
+    if edit:
+        try:
+            await message.edit_text(text, reply_markup=markup)
+        except TelegramBadRequest as e:
+            # частые случаи: "message is not modified" или "can't edit message"
+            if ("message is not modified" in str(e)) or ("can't edit message" in str(e)):
+                return
+            raise
     else:
-        text = "Меню (Родитель)\n\nВыберите ребёнка и смотрите расписание. Напоминания придут автоматически."
-    await message.answer(text, reply_markup=main_menu(user.role.value))
+        await message.answer(text, reply_markup=markup)
+
+
+@router.message(F.text.in_({"/menu", "Меню"}))
+async def menu(message: Message, session):
+    user = await get_user(session, message.from_user.id)
+    await show_menu(message, session, user, edit=False)
+
+
+# <<< ВОТ ЭТО ВАЖНО: меню по callback для кнопки "Назад" >>>
+@router.callback_query(MenuCb.filter(F.section == "menu"))
+async def menu_inline(call: CallbackQuery, session):
+    user = await get_user(session, call.from_user.id)
+    await show_menu(call.message, session, user, edit=True)
+    await call.answer()
 
 
 @router.callback_query(MenuCb.filter(F.section == "tz"))
@@ -52,8 +83,11 @@ async def tz_set(call: CallbackQuery, callback_data: TzCb, session):
     )
     await session.commit()
 
-    await call.message.edit_text(f"Часовой пояс установлен: {callback_data.value}\nНапишите /menu")
+    # можно сразу показать меню, вместо "Напишите /menu"
+    user = await get_user(session, call.from_user.id)
+    await show_menu(call.message, session, user, edit=True)
     await call.answer()
+
 
 @router.callback_query(MenuCb.filter(F.section == "help"))
 async def help_inline(call: CallbackQuery, session):
@@ -75,9 +109,7 @@ async def help_inline(call: CallbackQuery, session):
     try:
         await call.message.edit_text(text, reply_markup=main_menu(user.role.value))
     except TelegramBadRequest as e:
-        # самое частое — message is not modified
         if "message is not modified" not in str(e):
             raise
 
     await call.answer()
-

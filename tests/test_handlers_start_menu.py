@@ -210,9 +210,11 @@ async def test_tz_set_updates_user_timezone(session):
     cb = TzCb(value="Europe/Moscow")
     await menu_mod.tz_set(call, cb, session)
 
-    # edit_text был вызван
+    # edit_text был вызван и показывает меню (а не "Часовой пояс установлен")
     assert msg.edits
-    assert "Часовой пояс установлен: Europe/Moscow" in msg.edits[0][0]
+    edited_text = msg.edits[0][0]
+    assert "Меню (Родитель)" in edited_text
+
     assert call.answered == 1
 
     # timezone реально обновился в БД

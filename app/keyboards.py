@@ -192,3 +192,28 @@ def subscription_packages_kb(student_id: int) -> InlineKeyboardMarkup:
     kb.button(text="Абонемент +12", callback_data=SubCb(action="add", student_id=student_id, qty=12).pack())
     kb.adjust(2)
     return kb.as_markup()
+
+def student_schedule_homework_kb(student_id: int, lessons, per_row: int = 6) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+
+    for l in lessons:
+        kb.button(
+            text="ДЗ",
+            callback_data=HomeworkCb(action="view", lesson_id=l.id, student_id=student_id, offset=0).pack()
+        )
+
+    # последняя кнопка — отдельной строкой
+    kb.button(text="Назад", callback_data=MenuCb(section="menu").pack())
+
+    # раскладка: ДЗ по per_row, затем 1 кнопка "Назад"
+    n = len(lessons)
+    rows = [per_row] * (n // per_row) + ([n % per_row] if n % per_row else []) + [1]
+    kb.adjust(*rows)
+
+    return kb.as_markup()
+
+def student_homework_back_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Назад к расписанию", callback_data=MenuCb(section="student_schedule").pack())
+    kb.adjust(1)
+    return kb.as_markup()

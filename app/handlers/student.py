@@ -8,6 +8,7 @@ from ..models import User, Role, Student, Lesson, LessonStatus
 from ..callbacks import MenuCb
 from ..utils_time import fmt_dt_for_tz
 from ..services.homework import homework_avg_last_n
+from ..keyboards import student_schedule_homework_kb  # <-- убедись, что импорт есть
 
 router = Router()
 
@@ -46,13 +47,21 @@ async def student_schedule(call: CallbackQuery, session):
         .order_by(Lesson.start_at)
     )).scalars().all()
 
+    tzname = user.timezone or student.timezone or "Europe/Moscow"
+
     if not lessons:
         await call.message.edit_text(board_line + avg_line + "На ближайшие 7 дней уроков нет.")
         await call.answer()
         return
 
-    tzname = user.timezone or "Europe/Moscow"
     lines = [f"- {fmt_dt_for_tz(l.start_at, tzname)} ({tzname})" for l in lessons]
 
-    await call.message.edit_text(board_line + avg_line + "Ваши уроки (7 дней):\n" + "\n".join(lines))
+    await call.message.edit_text(
+        board_line
+        + avg_line
+        + "Ваши уроки (7 дней):\n"
+        + "\n".join(lines)
+        + "\n\nНажмите «ДЗ» для просмотра.",
+        reply_markup=student_schedule_homework_kb(student.id, lessons),
+    )
     await call.answer()

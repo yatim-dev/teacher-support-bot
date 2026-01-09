@@ -13,7 +13,7 @@ from ..models import (
     LessonCharge, ChargeStatus, BillingMode
 )
 from ..callbacks import LessonCb, AdminCb, HomeworkCb, LessonPayCb
-from ..keyboards import lesson_actions_kb, student_card_kb, homework_kb
+from ..keyboards import lesson_actions_kb, student_card_kb, homework_kb, student_homework_back_kb
 from ..services.billing import mark_lesson_done, mark_charge_paid
 from ..utils_time import fmt_dt_for_tz
 from app.handlers.admin.common import get_user, ensure_teacher  # как у тебя
@@ -23,11 +23,6 @@ class HomeworkFSM(StatesGroup):
     title = State()
     description = State()
     grade = State()
-
-def ensure_teacher(user: User):
-    if user.role != Role.teacher:
-        raise PermissionError
-
 
 async def render_lesson_card(call: CallbackQuery, session, student_id: int, offset: int):
     st = (await session.execute(select(Student).where(Student.id == student_id))).scalar_one()
@@ -194,7 +189,7 @@ async def lesson_action(call: CallbackQuery, callback_data: LessonCb, session, b
         return
 
 
-async def render_homework(call: CallbackQuery, session, lesson_id: int, student_id: int, offset: int):
+async def render_homework(call: CallbackQuery, session, lesson_id: int, student_id: int, offset: int, *, for_student: bool = False):
     lesson = (await session.execute(select(Lesson).where(Lesson.id == lesson_id))).scalar_one()
     st = (await session.execute(select(Student).where(Student.id == student_id))).scalar_one()
 
@@ -214,16 +209,41 @@ async def render_homework(call: CallbackQuery, session, lesson_id: int, student_
         text.append(f"Описание: {hw.description}")
         text.append(f"Оценка: {hw.grade if hw.grade is not None else '-'} / 10")
 
-    await call.message.edit_text("\n".join(text), reply_markup=homework_kb(lesson_id, student_id, offset))
+    if for_student:
+        markup = student_homework_back_kb()
+    else:
+        markup = homework_kb(lesson_id, student_id, offset)
+
+    await call.message.edit_text("\n".join(text), reply_markup=markup)
 
 @router.callback_query(HomeworkCb.filter())
 async def homework_menu(call: CallbackQuery, callback_data: HomeworkCb, state: FSMContext, session):
     user = (await session.execute(select(User).where(User.tg_id == call.from_user.id))).scalar_one()
-    ensure_teacher(user)
 
     lesson_id = callback_data.lesson_id
-    student_id = callback_data.student_id
     offset = callback_data.offset
+
+    # --- Режим ученика ---
+    if user.role == Role.student:
+        if callback_data.action != "view":
+            await call.answer("Недоступно", show_alert=True)
+            return
+
+        st = (await session.execute(select(Student).where(Student.user_id == user.id))).scalar_one()
+        lesson = (await session.execute(select(Lesson).where(Lesson.id == lesson_id))).scalar_one()
+
+        # Ученик может смотреть ДЗ только своего урока
+        if lesson.student_id != st.id:
+            await call.answer("Недоступно", show_alert=True)
+            return
+
+        await render_homework(call, session, lesson_id=lesson_id, student_id=st.id, offset=0, for_student=True)
+        await call.answer()
+        return
+
+    ensure_teacher(user)
+
+    student_id = callback_data.student_id
 
     if callback_data.action == "back":
         await render_lesson_card(call, session, student_id=student_id, offset=offset)

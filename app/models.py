@@ -193,6 +193,7 @@ class Homework(Base):
 
     title: Mapped[str] = mapped_column(String(255))
     description: Mapped[str] = mapped_column(Text)
+    student_done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     grade: Mapped[Optional[int]] = mapped_column(Integer)  # 1..10
     graded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

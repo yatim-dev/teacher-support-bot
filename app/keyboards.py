@@ -217,3 +217,13 @@ def student_homework_back_kb() -> InlineKeyboardMarkup:
     kb.button(text="Назад к расписанию", callback_data=MenuCb(section="student_schedule").pack())
     kb.adjust(1)
     return kb.as_markup()
+
+def student_homework_kb(lesson_id: int, student_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(
+        text="Задание выполнено",
+        callback_data=HomeworkCb(action="done", lesson_id=lesson_id, student_id=student_id, offset=0).pack(),
+    )
+    kb.button(text="Назад к расписанию", callback_data=MenuCb(section="student_schedule").pack())
+    kb.adjust(1, 1)
+    return kb.as_markup()

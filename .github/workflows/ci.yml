@@ -28,7 +28,6 @@ jobs:
     env:
       PYTHONPATH: ${{ github.workspace }}
 
-      # чтобы app/config.py не падал при импорте handlers
       BOT_TOKEN: "test-token"
       TEACHER_TG_ID: "1"
       DATABASE_DSN: "postgresql+asyncpg://postgres:postgres@localhost:5432/teacher_support_bot_test"

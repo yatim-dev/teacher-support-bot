@@ -1,19 +1,21 @@
 from datetime import datetime, timezone
 
 from aiogram import Router, F
+from aiogram.exceptions import TelegramForbiddenError
 from aiogram.types import CallbackQuery
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy import select, update, delete, or_, and_, exists
 
+from ..config import settings
 from ..models import (
     User, Role, Lesson, LessonStatus, Student, ScheduleRule,
     Homework, ParentStudent, Parent, Notification, NotificationStatus,
     LessonCharge, ChargeStatus, BillingMode
 )
 from ..callbacks import LessonCb, AdminCb, HomeworkCb, LessonPayCb
-from ..keyboards import lesson_actions_kb, student_card_kb, homework_kb, student_homework_back_kb
+from ..keyboards import lesson_actions_kb, student_card_kb, homework_kb, student_homework_kb
 from ..services.billing import mark_lesson_done, mark_charge_paid
 from ..utils_time import fmt_dt_for_tz
 from app.handlers.admin.common import get_user, ensure_teacher  # как у тебя
@@ -209,8 +211,14 @@ async def render_homework(call: CallbackQuery, session, lesson_id: int, student_
         text.append(f"Описание: {hw.description}")
         text.append(f"Оценка: {hw.grade if hw.grade is not None else '-'} / 10")
 
+        # ... внутри render_homework, в ветке if hw:
+        if hw.student_done_at:
+            done_when = fmt_dt_for_tz(hw.student_done_at, st.timezone)
+            text.append("")
+            text.append(f"Статус: выполнено (отмечено {done_when} ({st.timezone}))")
+
     if for_student:
-        markup = student_homework_back_kb()
+        markup = student_homework_kb(lesson_id=lesson_id, student_id=student_id)
     else:
         markup = homework_kb(lesson_id, student_id, offset)
 
@@ -218,29 +226,87 @@ async def render_homework(call: CallbackQuery, session, lesson_id: int, student_
 
 @router.callback_query(HomeworkCb.filter())
 async def homework_menu(call: CallbackQuery, callback_data: HomeworkCb, state: FSMContext, session):
-    user = (await session.execute(select(User).where(User.tg_id == call.from_user.id))).scalar_one()
+    user = (await session.execute(
+        select(User).where(User.tg_id == call.from_user.id)
+    )).scalar_one()
 
     lesson_id = callback_data.lesson_id
     offset = callback_data.offset
 
-    # --- Режим ученика ---
+    # ==========================
+    # РЕЖИМ УЧЕНИКА
+    # ==========================
     if user.role == Role.student:
-        if callback_data.action != "view":
+        if callback_data.action not in {"view", "done"}:
             await call.answer("Недоступно", show_alert=True)
             return
 
-        st = (await session.execute(select(Student).where(Student.user_id == user.id))).scalar_one()
-        lesson = (await session.execute(select(Lesson).where(Lesson.id == lesson_id))).scalar_one()
+        st = (await session.execute(
+            select(Student).where(Student.user_id == user.id)
+        )).scalar_one()
 
-        # Ученик может смотреть ДЗ только своего урока
+        lesson = (await session.execute(
+            select(Lesson).where(Lesson.id == lesson_id)
+        )).scalar_one()
+
+        # ученик может работать только со своим уроком
         if lesson.student_id != st.id:
             await call.answer("Недоступно", show_alert=True)
             return
 
-        await render_homework(call, session, lesson_id=lesson_id, student_id=st.id, offset=0, for_student=True)
-        await call.answer()
+        # --- view ---
+        if callback_data.action == "view":
+            await render_homework(
+                call, session,
+                lesson_id=lesson_id, student_id=st.id, offset=0,
+                for_student=True
+            )
+            await call.answer()
+            return
+
+        # --- done ---
+        hw = (await session.execute(
+            select(Homework).where(Homework.lesson_id == lesson_id)
+        )).scalar_one_or_none()
+
+        if not hw:
+            await call.answer("ДЗ ещё не задано", show_alert=True)
+            return
+
+        first_time = hw.student_done_at is None
+        if first_time:
+            hw.student_done_at = datetime.now(timezone.utc)
+            await session.commit()
+
+            # уведомление учителю (единственный учитель из settings)
+            lesson_when = fmt_dt_for_tz(lesson.start_at, st.timezone)
+            done_when = fmt_dt_for_tz(hw.student_done_at, st.timezone)
+
+            notify_text = (
+                "Ученик отметил ДЗ как выполненное\n\n"
+                f"Ученик: {st.full_name}\n"
+                f"Урок: {lesson_when} ({st.timezone})\n"
+                f"Отметил: {done_when} ({st.timezone})\n"
+                f"ДЗ: {hw.title or '-'}"
+            )
+
+            try:
+                await call.bot.send_message(settings.teacher_tg_id, notify_text)
+            except TelegramForbiddenError:
+                # учитель ещё не запускал бота (Telegram запрещает писать первым)
+                pass
+
+        await render_homework(
+            call, session,
+            lesson_id=lesson_id, student_id=st.id, offset=0,
+            for_student=True
+        )
+        await call.answer("Отмечено." if first_time else "Уже отмечено.")
         return
 
+    # ==========================
+    # РЕЖИМ УЧИТЕЛЯ
+    # ==========================
     ensure_teacher(user)
 
     student_id = callback_data.student_id
@@ -270,6 +336,8 @@ async def homework_menu(call: CallbackQuery, callback_data: HomeworkCb, state: F
         await call.message.edit_text("Введите оценку за ДЗ (1–10):")
         await call.answer()
         return
+
+    await call.answer("Неизвестное действие", show_alert=True)
 
 @router.message(HomeworkFSM.title)
 async def hw_set_title(message, state: FSMContext, session):

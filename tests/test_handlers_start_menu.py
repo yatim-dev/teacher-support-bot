@@ -35,13 +35,17 @@ class FakeMessage:
 
 
 class FakeCallbackQuery:
-    def __init__(self, from_user: FakeFromUser, message: FakeMessage):
+    def __init__(self, from_user, message):
         self.from_user = from_user
         self.message = message
         self.answered = 0
+        self.answer_args = None
+        self.answer_kwargs = None
 
-    async def answer(self):
+    async def answer(self, *args, **kwargs):
         self.answered += 1
+        self.answer_args = args
+        self.answer_kwargs = kwargs
 
 
 class FakeFSMContext:

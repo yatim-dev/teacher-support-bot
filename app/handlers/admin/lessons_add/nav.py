@@ -64,13 +64,13 @@ async def fsm_add_single_nav(call: CallbackQuery, callback_data: FsmNavCb, state
     if current == AddSingleLessonFSM.duration.state:
         await state.set_state(AddSingleLessonFSM.time_)
         await call.message.edit_text(
-            "Введите время HH:MM (локальное время ученика), например 16:30",
+            "Введите время HH:MM (локальное время ученика), например `16:30`",
             reply_markup=fsm_nav_kb("add_single", student_id)
         )
     elif current == AddSingleLessonFSM.time_.state:
         await state.set_state(AddSingleLessonFSM.date_)
         await call.message.edit_text(
-            "Введите дату YYYY-MM-DD, например 2026-01-10:",
+            "Введите дату YYYY-MM-DD, например `2026-01-10`:",
             reply_markup=fsm_nav_kb("add_single", student_id)
         )
     else:

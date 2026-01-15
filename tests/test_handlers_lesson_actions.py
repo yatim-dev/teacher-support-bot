@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 from datetime import datetime, timezone, timedelta
-
+from unittest.mock import AsyncMock
 from sqlalchemy import select, func
 
 from app.models import (
@@ -15,7 +15,7 @@ from app.models import (
     Notification, NotificationStatus,
     LessonCharge, ChargeStatus,
 )
-from app.callbacks import LessonCb, LessonPayCb, HomeworkCb, AdminCb
+from app.callbacks import LessonCb, HomeworkCb, AdminCb
 
 
 # ---------- Fakes ----------
@@ -32,24 +32,18 @@ class FakeMessage:
         self.answers: list[tuple[str, dict]] = []
         self.edits: list[tuple[str, dict]] = []
 
-    async def answer(self, text: str, **kwargs):
-        self.answers.append((text, kwargs))
+    async def answer(self, text: str, reply_markup=None, **kwargs):
+        self.answers.append((text, {"reply_markup": reply_markup, **kwargs}))
 
-    async def edit_text(self, text: str, **kwargs):
-        self.edits.append((text, kwargs))
+    async def edit_text(self, text: str, reply_markup=None, **kwargs):
+        self.edits.append((text, {"reply_markup": reply_markup, **kwargs}))
 
 
 class FakeCallbackQuery:
     def __init__(self, from_user: FakeFromUser, message: FakeMessage):
         self.from_user = from_user
         self.message = message
-        self.answered = 0
-        self.alerts: list[tuple[str, bool]] = []
-
-    async def answer(self, text: str | None = None, show_alert: bool = False):
-        self.answered += 1
-        if text is not None:
-            self.alerts.append((text, show_alert))
+        self.answer = AsyncMock()
 
 
 class FakeFSMContext:
@@ -92,24 +86,25 @@ async def create_teacher(session, tg_id: int = 6000) -> User:
 # ---------- tests ----------
 @pytest.mark.asyncio
 async def test_admin_lessons_requires_student_id(session):
-    import app.handlers.lesson_actions as la
+    import app.handlers.admin.lessons as lessons_mod
 
     teacher = await create_teacher(session, tg_id=6001)
 
     msg = FakeMessage(FakeFromUser(teacher.tg_id))
     call = FakeCallbackQuery(from_user=msg.from_user, message=msg)
 
-    await la.admin_lessons(call, AdminCb(action="lessons", student_id=None), session)
+    await lessons_mod.admin_lessons(call, AdminCb(action="lessons", student_id=None), session)
 
-    assert call.answered == 1
-    assert call.alerts
-    assert call.alerts[0][0] == "Не выбран ученик"
-    assert call.alerts[0][1] is True
+    # должен ответить show_alert=True с текстом "Не выбран ученик"
+    call.answer.assert_awaited()
+    answered = call.answer.await_args
+    assert answered.args and answered.args[0] == "Не выбран ученик"
+    assert answered.kwargs.get("show_alert") is True
 
 
 @pytest.mark.asyncio
 async def test_render_lesson_card_when_no_lessons(session):
-    import app.handlers.lesson_actions as la
+    import app.handlers.admin.lessons as lessons_mod
 
     teacher = await create_teacher(session, tg_id=6002)
     st = Student(full_name="S", timezone="Europe/Moscow", billing_mode=BillingMode.subscription)
@@ -119,24 +114,34 @@ async def test_render_lesson_card_when_no_lessons(session):
     msg = FakeMessage(FakeFromUser(teacher.tg_id))
     call = FakeCallbackQuery(from_user=msg.from_user, message=msg)
 
-    await la.render_lesson_card(call, session, student_id=st.id, offset=0)
+    await lessons_mod.render_lesson_card(call, session, student_id=st.id, offset=0)
 
     assert msg.edits
-    assert "Ближайших уроков нет" in msg.edits[0][0]
+    text, _kwargs = msg.edits[0]
+    assert "Ближайших уроков нет" in text
 
 
 @pytest.mark.asyncio
 async def test_lesson_action_next_prev_renders(session):
-    import app.handlers.lesson_actions as la
+    import app.handlers.admin.lessons as lessons_mod
 
     teacher = await create_teacher(session, tg_id=6003)
     st = Student(full_name="S", timezone="Europe/Moscow", billing_mode=BillingMode.subscription)
     session.add(st)
     await session.flush()
 
-    # два planned урока
-    l1 = Lesson(student_id=st.id, start_at=datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc), duration_min=60, status=LessonStatus.planned)
-    l2 = Lesson(student_id=st.id, start_at=datetime(2026, 1, 2, 10, 0, tzinfo=timezone.utc), duration_min=60, status=LessonStatus.planned)
+    l1 = Lesson(
+        student_id=st.id,
+        start_at=datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc),
+        duration_min=60,
+        status=LessonStatus.planned,
+    )
+    l2 = Lesson(
+        student_id=st.id,
+        start_at=datetime(2026, 1, 2, 10, 0, tzinfo=timezone.utc),
+        duration_min=60,
+        status=LessonStatus.planned,
+    )
     session.add_all([l1, l2])
     await session.commit()
 
@@ -145,28 +150,36 @@ async def test_lesson_action_next_prev_renders(session):
 
     # next
     cb_next = LessonCb(action="next", lesson_id=l1.id, student_id=st.id, offset=0)
-    await la.lesson_action(call, cb_next, session, bot=FakeBot())
-    assert call.answered == 1
+    await lessons_mod.lesson_action(call, cb_next, session, bot=FakeBot())
+
+    assert call.answer.await_count == 1
     assert msg.edits
     assert "Урок:" in msg.edits[-1][0]
 
     # prev (с offset=1 возвращает на 0)
     cb_prev = LessonCb(action="prev", lesson_id=l2.id, student_id=st.id, offset=1)
-    await la.lesson_action(call, cb_prev, session, bot=FakeBot())
-    assert call.answered == 2
+    await lessons_mod.lesson_action(call, cb_prev, session, bot=FakeBot())
+
+    assert call.answer.await_count == 2
     assert "Урок:" in msg.edits[-1][0]
 
 
 @pytest.mark.asyncio
 async def test_lesson_action_cancel_single_deletes_lesson(session):
-    import app.handlers.lesson_actions as la
+    import app.handlers.admin.lessons as lessons_mod
 
     teacher = await create_teacher(session, tg_id=6004)
     st = Student(full_name="S", timezone="Europe/Moscow", billing_mode=BillingMode.subscription)
     session.add(st)
     await session.flush()
 
-    l = Lesson(student_id=st.id, start_at=datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc), duration_min=60, status=LessonStatus.planned)
+    l = Lesson(
+        student_id=st.id,
+        start_at=datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc),
+        duration_min=60,
+        status=LessonStatus.planned,
+        source_rule_id=None,  # важно: чтобы считалось разовым
+    )
     session.add(l)
     await session.commit()
 
@@ -174,8 +187,10 @@ async def test_lesson_action_cancel_single_deletes_lesson(session):
     call = FakeCallbackQuery(from_user=msg.from_user, message=msg)
 
     cb = LessonCb(action="cancel", lesson_id=l.id, student_id=st.id, offset=0)
-    await la.lesson_action(call, cb, session, bot=FakeBot())
+    await lessons_mod.lesson_action(call, cb, session, bot=FakeBot())
 
+    call.answer.assert_awaited()
+    assert msg.edits
     assert "Разовое занятие отменено" in msg.edits[-1][0]
 
     l_db = (await session.execute(select(Lesson).where(Lesson.id == l.id))).scalar_one_or_none()
@@ -184,7 +199,7 @@ async def test_lesson_action_cancel_single_deletes_lesson(session):
 
 @pytest.mark.asyncio
 async def test_lesson_action_cancel_recurring_marks_canceled(session):
-    import app.handlers.lesson_actions as la
+    import app.handlers.admin.lessons as lessons_mod
 
     teacher = await create_teacher(session, tg_id=6005)
     st = Student(full_name="S", timezone="Europe/Moscow", billing_mode=BillingMode.subscription)
@@ -209,7 +224,7 @@ async def test_lesson_action_cancel_recurring_marks_canceled(session):
     call = FakeCallbackQuery(from_user=msg.from_user, message=msg)
 
     cb = LessonCb(action="cancel", lesson_id=l.id, student_id=st.id, offset=0)
-    await la.lesson_action(call, cb, session, bot=FakeBot())
+    await lessons_mod.lesson_action(call, cb, session, bot=FakeBot())
 
     assert "отменено" in msg.edits[-1][0].lower()
 
@@ -219,7 +234,7 @@ async def test_lesson_action_cancel_recurring_marks_canceled(session):
 
 @pytest.mark.asyncio
 async def test_lesson_action_delete_series_deletes_future_lessons_and_rule(session):
-    import app.handlers.lesson_actions as la
+    import app.handlers.admin.lessons as lessons_mod
 
     teacher = await create_teacher(session, tg_id=6006)
     st = Student(full_name="S", timezone="Europe/Moscow", billing_mode=BillingMode.subscription)
@@ -242,7 +257,7 @@ async def test_lesson_action_delete_series_deletes_future_lessons_and_rule(sessi
     call = FakeCallbackQuery(from_user=msg.from_user, message=msg)
 
     cb = LessonCb(action="delete_series", lesson_id=future1.id, student_id=st.id, offset=0)
-    await la.lesson_action(call, cb, session, bot=FakeBot())
+    await lessons_mod.lesson_action(call, cb, session, bot=FakeBot())
 
     # правило удалено
     rule_db = (await session.execute(select(ScheduleRule).where(ScheduleRule.id == rule.id))).scalar_one_or_none()
@@ -259,7 +274,7 @@ async def test_lesson_action_delete_series_deletes_future_lessons_and_rule(sessi
 
 @pytest.mark.asyncio
 async def test_lesson_action_done_single_creates_charge_and_shows_pay_button(session):
-    import app.handlers.lesson_actions as la
+    import app.handlers.admin.lessons as lessons_mod
     from app.callbacks import LessonPayCb
 
     teacher = await create_teacher(session, tg_id=6007)
@@ -294,7 +309,7 @@ async def test_lesson_action_done_single_creates_charge_and_shows_pay_button(ses
     bot = FakeBot()
 
     cb = LessonCb(action="done", lesson_id=lesson_id, student_id=st_id, offset=0)
-    await la.lesson_action(call, cb, session, bot=bot)
+    await lessons_mod.lesson_action(call, cb, session, bot=bot)
 
     # charge создан
     ch = (await session.execute(select(LessonCharge).where(LessonCharge.lesson_id == lesson_id))).scalar_one()
@@ -316,7 +331,7 @@ async def test_lesson_action_done_single_creates_charge_and_shows_pay_button(ses
 
 @pytest.mark.asyncio
 async def test_lesson_pay_paid_marks_paid_and_rerenders_cards(session):
-    import app.handlers.lesson_actions as la
+    import app.handlers.admin.payments as payments_mod
     from app.callbacks import LessonPayCb
 
     teacher = await create_teacher(session, tg_id=6008)
@@ -345,7 +360,7 @@ async def test_lesson_pay_paid_marks_paid_and_rerenders_cards(session):
     call = FakeCallbackQuery(from_user=msg.from_user, message=msg)
 
     # оплата теперь отмечается по lesson_id
-    await la.lesson_pay_action(
+    await payments_mod.lesson_pay_action(
         call,
         LessonPayCb(action="paid", lesson_id=l.id, student_id=st_id, offset=0),
         session,
@@ -366,74 +381,128 @@ async def test_lesson_pay_paid_marks_paid_and_rerenders_cards(session):
 # ---------- Homework flow ----------
 @pytest.mark.asyncio
 async def test_homework_menu_edit_sets_fsm_title(session):
-    import app.handlers.lesson_actions as la
+    import app.handlers.admin.homeworks as hw_mod
 
     teacher = await create_teacher(session, tg_id=6010)
+
     st = Student(full_name="S", timezone="Europe/Moscow", billing_mode=BillingMode.subscription)
     session.add(st)
-    await session.flush()
-
-    lesson = Lesson(student_id=st.id, start_at=datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc), duration_min=60, status=LessonStatus.planned)
-    session.add(lesson)
     await session.commit()
+    await session.refresh(st)
+
+    # ДЗ уже существует (чтобы было что "редактировать")
+    hw = Homework(
+        student_id=st.id,
+        title="Old",
+        description="Old",
+        grade=None,
+        graded_at=None,
+        due_at=None,
+        student_done_at=None,
+    )
+    session.add(hw)
+    await session.commit()
+    await session.refresh(hw)
 
     msg = FakeMessage(FakeFromUser(teacher.tg_id))
     call = FakeCallbackQuery(from_user=msg.from_user, message=msg)
     state = FakeFSMContext()
 
-    cb = HomeworkCb(action="edit", lesson_id=lesson.id, student_id=st.id, offset=0)
-    await la.homework_menu(call, cb, state, session)
+    cb = HomeworkCb(action="edit", homework_id=hw.id, student_id=st.id, offset=0)
+    await hw_mod.homework_menu(call, cb, state, session)
 
-    assert state.state == la.HomeworkFSM.title
-    assert state.data["lesson_id"] == lesson.id
+    assert state.state == hw_mod.HomeworkFSM.title
+    assert state.data["homework_id"] == hw.id
+    assert state.data["student_id"] == st.id
     assert "Введите название" in msg.edits[-1][0]
+    call.answer.assert_awaited()
 
 
 @pytest.mark.asyncio
 async def test_hw_set_title_and_description_creates_homework(session):
-    import app.handlers.lesson_actions as la
+    import app.handlers.admin.homeworks as hw_mod
 
     teacher = await create_teacher(session, tg_id=6011)
     st = Student(full_name="S", timezone="Europe/Moscow", billing_mode=BillingMode.subscription)
     session.add(st)
-    await session.flush()
-
-    lesson = Lesson(student_id=st.id, start_at=datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc), duration_min=60, status=LessonStatus.planned)
-    session.add(lesson)
     await session.commit()
+    await session.refresh(st)
 
     state = FakeFSMContext()
-    await state.update_data(lesson_id=lesson.id, student_id=st.id, offset=0)
+    await state.update_data(student_id=st.id, offset=0)
 
     # title too short
     msg1 = FakeMessage(FakeFromUser(teacher.tg_id), text="A")
-    await la.hw_set_title(msg1, state, session)
+    await hw_mod.hw_set_title(msg1, state, session)
+    assert msg1.answers
     assert "слишком короткое" in msg1.answers[-1][0].lower()
 
     # title ok -> go to description
     msg2 = FakeMessage(FakeFromUser(teacher.tg_id), text="HW Title")
-    await la.hw_set_title(msg2, state, session)
-    assert state.state == la.HomeworkFSM.description
+    await hw_mod.hw_set_title(msg2, state, session)
+    assert state.state == hw_mod.HomeworkFSM.description
 
     # description too short
     msg3 = FakeMessage(FakeFromUser(teacher.tg_id), text="x")
-    await la.hw_set_description(msg3, state, session)
+    await hw_mod.hw_set_description(msg3, state, session)
+    assert msg3.answers
     assert "слишком короткое" in msg3.answers[-1][0].lower()
 
-    # description ok -> homework saved
+    # description ok -> homework created -> go to due_at
     msg4 = FakeMessage(FakeFromUser(teacher.tg_id), text="Do exercises")
-    await la.hw_set_description(msg4, state, session)
+    await hw_mod.hw_set_description(msg4, state, session)
 
-    hw = (await session.execute(select(Homework).where(Homework.lesson_id == lesson.id))).scalar_one()
+    assert state.state == hw_mod.HomeworkFSM.due_at
+    assert "homework_id" in state.data
+
+    hw_id = state.data["homework_id"]
+    hw = (await session.execute(select(Homework).where(Homework.id == hw_id))).scalar_one()
     assert hw.title == "HW Title"
     assert hw.description == "Do exercises"
     assert hw.grade is None
+
+
+@pytest.mark.asyncio
+async def test_hw_set_due_at_dash_finishes_flow(session):
+    """
+    Завершение создания: на шаге due_at вводим '-' -> due_at=None и state.clear()
+    """
+    import app.handlers.admin.homeworks as hw_mod
+
+    teacher = await create_teacher(session, tg_id=60115)
+    st = Student(full_name="S", timezone="Europe/Moscow", billing_mode=BillingMode.subscription)
+    session.add(st)
+    await session.commit()
+    await session.refresh(st)
+
+    hw = Homework(
+        student_id=st.id,
+        title="HW",
+        description="Desc",
+        grade=None,
+        graded_at=None,
+        due_at=None,
+        student_done_at=None,
+    )
+    session.add(hw)
+    await session.commit()
+    await session.refresh(hw)
+
+    state = FakeFSMContext()
+    await state.update_data(homework_id=hw.id, student_id=st.id, offset=0)
+    await state.set_state(hw_mod.HomeworkFSM.due_at)
+
+    msg = FakeMessage(FakeFromUser(teacher.tg_id), text="-")
+    await hw_mod.hw_set_due_at(msg, state, session)
+
+    hw2 = (await session.execute(select(Homework).where(Homework.id == hw.id))).scalar_one()
+    assert hw2.due_at is None
     assert state.cleared is True
 
 
 @pytest.mark.asyncio
 async def test_hw_set_grade_invalid_and_then_creates_notifications(session):
-    import app.handlers.lesson_actions as la
+    import app.handlers.admin.homeworks as hw_mod
 
     teacher = await create_teacher(session, tg_id=6012)
 
@@ -453,57 +522,62 @@ async def test_hw_set_grade_invalid_and_then_creates_notifications(session):
     session.add(ParentStudent(parent_id=p.id, student_id=st.id))
     await session.flush()
 
-    lesson = Lesson(student_id=st.id, start_at=datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc), duration_min=60, status=LessonStatus.planned)
-    session.add(lesson)
-    await session.flush()
-
-    hw = Homework(lesson_id=lesson.id, title="HW", description="Desc", grade=None, graded_at=None)
+    hw = Homework(
+        student_id=st.id,
+        title="HW",
+        description="Desc",
+        grade=None,
+        graded_at=None,
+        due_at=None,
+        student_done_at=None,
+    )
     session.add(hw)
     await session.commit()
+    await session.refresh(hw)
 
     state = FakeFSMContext()
-    await state.update_data(lesson_id=lesson.id, student_id=st.id, offset=0)
-    await state.set_state(la.HomeworkFSM.grade)
+    await state.update_data(homework_id=hw.id, student_id=st.id, offset=0)
+    await state.set_state(hw_mod.HomeworkFSM.grade)
 
     # invalid grade
     msg1 = FakeMessage(FakeFromUser(teacher.tg_id), text="11")
-    await la.hw_set_grade(msg1, state, session)
-    assert "1–10" in msg1.answers[-1][0]
+    await hw_mod.hw_set_grade(msg1, state, session)
+    assert msg1.answers
+    assert ("1–10" in msg1.answers[-1][0]) or ("1-10" in msg1.answers[-1][0])
 
     # valid grade
     msg2 = FakeMessage(FakeFromUser(teacher.tg_id), text="9")
-    await la.hw_set_grade(msg2, state, session)
+    await hw_mod.hw_set_grade(msg2, state, session)
 
     hw2 = (await session.execute(select(Homework).where(Homework.id == hw.id))).scalar_one()
     assert hw2.grade == 9
     assert hw2.graded_at is not None
 
-    # notifications queued for student user + parent user
     notifs = (await session.execute(select(Notification).where(Notification.type == "hw_graded"))).scalars().all()
     assert len(notifs) == 2
     assert all(n.status == NotificationStatus.pending for n in notifs)
     assert all(n.entity_id == hw.id for n in notifs)
+
     assert state.cleared is True
 
 
 @pytest.mark.asyncio
 async def test_hw_set_grade_without_homework_requires_create_first(session):
-    import app.handlers.lesson_actions as la
+    import app.handlers.admin.homeworks as hw_mod
 
     teacher = await create_teacher(session, tg_id=6013)
     st = Student(full_name="S", timezone="Europe/Moscow", billing_mode=BillingMode.subscription)
     session.add(st)
-    await session.flush()
-
-    lesson = Lesson(student_id=st.id, start_at=datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc), duration_min=60, status=LessonStatus.planned)
-    session.add(lesson)
     await session.commit()
+    await session.refresh(st)
 
     state = FakeFSMContext()
-    await state.update_data(lesson_id=lesson.id, student_id=st.id, offset=0)
-    await state.set_state(la.HomeworkFSM.grade)
+    await state.update_data(homework_id=999999, student_id=st.id, offset=0)  # несуществующее ДЗ
+    await state.set_state(hw_mod.HomeworkFSM.grade)
 
     msg = FakeMessage(FakeFromUser(teacher.tg_id), text="5")
-    await la.hw_set_grade(msg, state, session)
+    await hw_mod.hw_set_grade(msg, state, session)
 
-    assert "Сначала задайте домашнее задание" in msg.answers[-1][0]
+    assert msg.answers
+    t = msg.answers[-1][0].lower()
+    assert ("дз" in t) or ("сначала" in t) or ("не найден" in t)

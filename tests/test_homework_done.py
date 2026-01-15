@@ -10,8 +10,7 @@ from app.callbacks import HomeworkCb
 from app.config import settings
 from app.models import Homework, Lesson, LessonStatus, Role, Student, User
 
-# поправьте импорт под ваш реальный модуль, где лежит handler homework_menu
-from app.handlers.lesson_actions import homework_menu
+from app.handlers.admin.homeworks import homework_menu
 
 
 class FakeMessage:
@@ -40,13 +39,8 @@ def handler_mod():
 async def test_student_done_sets_student_done_at_and_notifies_teacher(session, monkeypatch, handler_mod):
     monkeypatch.setattr(settings, "teacher_tg_id", 999999)
 
-    # Мокаем render_homework, чтобы тест не зависел от текста/клавиатур
     render_mock = AsyncMock()
     monkeypatch.setattr(handler_mod, "render_homework", render_mock)
-
-    # чтобы текст уведомления был стабильнее (если используете форматирование дат)
-    if hasattr(handler_mod, "fmt_dt_for_tz"):
-        monkeypatch.setattr(handler_mod, "fmt_dt_for_tz", lambda dt, tz: "DATE")
 
     # пользователь-ученик
     u = User(tg_id=101, role=Role.student, name="S", timezone="Europe/Moscow")
@@ -59,34 +53,31 @@ async def test_student_done_sets_student_done_at_and_notifies_teacher(session, m
     await session.commit()
     await session.refresh(st)
 
-    lesson = Lesson(
+    # ДЗ теперь не связано с Lesson
+    hw = Homework(
         student_id=st.id,
-        status=LessonStatus.planned,
-        start_at=datetime.now(timezone.utc) + timedelta(days=1),
+        title="HW",
+        description="Desc",
+        grade=None,
+        graded_at=None,
+        due_at=None,
+        student_done_at=None,
     )
-    session.add(lesson)
-    await session.commit()
-    await session.refresh(lesson)
-
-    hw = Homework(lesson_id=lesson.id, title="HW", description="Desc", grade=None, student_done_at=None)
     session.add(hw)
     await session.commit()
     await session.refresh(hw)
 
     call = FakeCall(tg_id=101)
-    cb = HomeworkCb(action="done", lesson_id=lesson.id, student_id=st.id, offset=0)
+    cb = HomeworkCb(action="done", homework_id=hw.id, student_id=st.id, offset=0)
 
     state = SimpleNamespace()
     await homework_menu(call, callback_data=cb, state=state, session=session)
 
-    # 1) student_done_at проставился
     hw2 = (await session.execute(select(Homework).where(Homework.id == hw.id))).scalar_one()
     assert hw2.student_done_at is not None
 
-    # 2) уведомление учителю отправилось 1 раз
     call.bot.send_message.assert_awaited_once()
-
-    sent_call = call.bot.send_message.await_args  # _Call
+    sent_call = call.bot.send_message.await_args
     args = sent_call.args
     kwargs = sent_call.kwargs
 
@@ -97,10 +88,7 @@ async def test_student_done_sets_student_done_at_and_notifies_teacher(session, m
         assert args[0] == 999999
         assert "Student One" in args[1]
 
-    # 3) карточка перерендерена
     render_mock.assert_awaited()
-
-    # 4) call.answer вызван
     call.answer.assert_awaited()
 
 
@@ -108,8 +96,6 @@ async def test_student_done_sets_student_done_at_and_notifies_teacher(session, m
 async def test_student_done_is_idempotent_no_second_notification(session, monkeypatch, handler_mod):
     monkeypatch.setattr(settings, "teacher_tg_id", 999999)
     monkeypatch.setattr(handler_mod, "render_homework", AsyncMock())
-    if hasattr(handler_mod, "fmt_dt_for_tz"):
-        monkeypatch.setattr(handler_mod, "fmt_dt_for_tz", lambda dt, tz: "DATE")
 
     u = User(tg_id=102, role=Role.student, name="S2", timezone="Europe/Moscow")
     session.add(u)
@@ -121,22 +107,21 @@ async def test_student_done_is_idempotent_no_second_notification(session, monkey
     await session.commit()
     await session.refresh(st)
 
-    lesson = Lesson(
+    hw = Homework(
         student_id=st.id,
-        status=LessonStatus.planned,
-        start_at=datetime.now(timezone.utc) + timedelta(days=1),
+        title="HW2",
+        description="Desc",
+        grade=None,
+        graded_at=None,
+        due_at=None,
+        student_done_at=None,
     )
-    session.add(lesson)
-    await session.commit()
-    await session.refresh(lesson)
-
-    hw = Homework(lesson_id=lesson.id, title="HW2", description="Desc", grade=None, student_done_at=None)
     session.add(hw)
     await session.commit()
     await session.refresh(hw)
 
     call = FakeCall(tg_id=102)
-    cb = HomeworkCb(action="done", lesson_id=lesson.id, student_id=st.id, offset=0)
+    cb = HomeworkCb(action="done", homework_id=hw.id, student_id=st.id, offset=0)
     state = SimpleNamespace()
 
     # 1-й раз: уведомление должно уйти
@@ -149,7 +134,7 @@ async def test_student_done_is_idempotent_no_second_notification(session, monkey
 
 
 @pytest.mark.asyncio
-async def test_student_done_denied_for_foreign_lesson(session, monkeypatch, handler_mod):
+async def test_student_done_denied_for_foreign_homework(session, monkeypatch, handler_mod):
     monkeypatch.setattr(settings, "teacher_tg_id", 999999)
     monkeypatch.setattr(handler_mod, "render_homework", AsyncMock())
 
@@ -164,7 +149,7 @@ async def test_student_done_denied_for_foreign_lesson(session, monkeypatch, hand
     await session.commit()
     await session.refresh(st1)
 
-    # ученик B + его урок
+    # ученик B + его ДЗ
     u2 = User(tg_id=202, role=Role.student, name="B", timezone="Europe/Moscow")
     session.add(u2)
     await session.commit()
@@ -175,23 +160,22 @@ async def test_student_done_denied_for_foreign_lesson(session, monkeypatch, hand
     await session.commit()
     await session.refresh(st2)
 
-    lesson_b = Lesson(
+    hw_b = Homework(
         student_id=st2.id,
-        status=LessonStatus.planned,
-        start_at=datetime.now(timezone.utc) + timedelta(days=1),
+        title="HW",
+        description="Desc",
+        grade=None,
+        graded_at=None,
+        due_at=None,
+        student_done_at=None,
     )
-    session.add(lesson_b)
+    session.add(hw_b)
     await session.commit()
-    await session.refresh(lesson_b)
+    await session.refresh(hw_b)
 
-    hw = Homework(lesson_id=lesson_b.id, title="HW", description="Desc", grade=None, student_done_at=None)
-    session.add(hw)
-    await session.commit()
-    await session.refresh(hw)
-
-    # A пытается отметить выполненным ДЗ урока B
+    # A пытается отметить выполненным ДЗ ученика B
     call = FakeCall(tg_id=201)
-    cb = HomeworkCb(action="done", lesson_id=lesson_b.id, student_id=st1.id, offset=0)
+    cb = HomeworkCb(action="done", homework_id=hw_b.id, student_id=st1.id, offset=0)
     state = SimpleNamespace()
 
     await homework_menu(call, callback_data=cb, state=state, session=session)
@@ -205,5 +189,5 @@ async def test_student_done_denied_for_foreign_lesson(session, monkeypatch, hand
     call.bot.send_message.assert_not_awaited()
 
     # student_done_at не проставился
-    hw2 = (await session.execute(select(Homework).where(Homework.id == hw.id))).scalar_one()
+    hw2 = (await session.execute(select(Homework).where(Homework.id == hw_b.id))).scalar_one()
     assert hw2.student_done_at is None

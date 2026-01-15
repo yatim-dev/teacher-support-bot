@@ -6,7 +6,8 @@ from typing import Optional
 
 from sqlalchemy import (
     BigInteger, Boolean, Date, DateTime, Enum, ForeignKey,
-    Integer, Numeric, String, Text, Time, UniqueConstraint, func
+    Integer, Numeric, String, Text, Time, UniqueConstraint,
+    func, Index
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -186,17 +187,37 @@ class Notification(Base):
 
 class Homework(Base):
     __tablename__ = "homeworks"
-    __table_args__ = (UniqueConstraint("lesson_id"),)  # 1 ДЗ на 1 урок (если нужно несколько — уберёте)
+
+    # частый запрос: домашки ученика + сортировка по дедлайну
+    __table_args__ = (
+        Index("ix_homeworks_student_due", "student_id", "due_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    lesson_id: Mapped[int] = mapped_column(ForeignKey("lessons.id", ondelete="CASCADE"), index=True)
 
-    title: Mapped[str] = mapped_column(String(255))
-    description: Mapped[str] = mapped_column(Text)
+    # ДЗ теперь принадлежит ученику, а не уроку
+    student_id: Mapped[int] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # самостоятельный дедлайн сдачи
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # отметка ученика "сделано"
     student_done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    grade: Mapped[Optional[int]] = mapped_column(Integer)  # 1..10
-    graded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # оценка/проверка учителем
+    grade: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1..10
+    graded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )

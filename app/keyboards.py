@@ -84,6 +84,7 @@ def student_card_kb(student_id: int, *, show_subscription: bool = False) -> Inli
     kb.button(text="Ключ для ученика", callback_data=AdminCb(action="keys_student", student_id=student_id).pack())
     kb.button(text="Ключ для родителя", callback_data=AdminCb(action="keys_parent", student_id=student_id).pack())
     kb.button(text="Ближайшие уроки", callback_data=AdminCb(action="lessons", student_id=student_id).pack())
+    kb.button(text="Домашние задания", callback_data=AdminCb(action="homeworks", student_id=student_id).pack())
     kb.button(text="Ссылка на доску", callback_data=BoardCb(action="edit", student_id=student_id).pack())
     kb.button(text="Удалить ученика", callback_data=AdminCb(action="student_delete", student_id=student_id).pack())
     kb.button(text="Назад к списку", callback_data=AdminCb(action="students", page=1).pack())
@@ -108,7 +109,8 @@ def lesson_actions_kb(
     is_recurring: bool,
     *,
     show_done: bool = True,
-    show_pay: bool = False,   # <-- новое
+    show_pay: bool = False,
+    homework_id: int | None = None,  # <-- НОВОЕ
 ) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
 
@@ -123,14 +125,18 @@ def lesson_actions_kb(
     kb.button(text="◀", callback_data=LessonCb(action="prev", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
     kb.button(text="▶", callback_data=LessonCb(action="next", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
 
-    kb.button(text="Домашнее задание", callback_data=HomeworkCb(action="view", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
+    # Домашка — только если у вас есть homework_id
+    if homework_id is not None:
+        kb.button(
+            text="Домашнее задание",
+            callback_data=HomeworkCb(action="view", homework_id=homework_id, student_id=student_id, offset=offset).pack(),
+        )
 
     if is_recurring:
         kb.button(text="Удалить цикл", callback_data=LessonCb(action="delete_series", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
 
     kb.button(text="Назад", callback_data=AdminCb(action="student", student_id=student_id).pack())
 
-    # если есть show_pay и show_done -> верхних кнопок 3, разложим (2,1)
     if show_pay and show_done:
         kb.adjust(2, 1, 2, 1, 1, 1)
     else:
@@ -178,11 +184,20 @@ def student_delete_confirm_kb(student_id: int) -> InlineKeyboardMarkup:
     kb.adjust(1)
     return kb.as_markup()
 
-def homework_kb(lesson_id: int, student_id: int, offset: int) -> InlineKeyboardMarkup:
+def homework_kb(homework_id: int, student_id: int, offset: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="✏️ Задать/Изменить", callback_data=HomeworkCb(action="edit", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
-    kb.button(text="✅ Поставить оценку", callback_data=HomeworkCb(action="grade", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
-    kb.button(text="⬅ Назад к уроку", callback_data=HomeworkCb(action="back", lesson_id=lesson_id, student_id=student_id, offset=offset).pack())
+    kb.button(
+        text="✏️ Задать/Изменить",
+        callback_data=HomeworkCb(action="edit", homework_id=homework_id, student_id=student_id, offset=offset).pack(),
+    )
+    kb.button(
+        text="✅ Поставить оценку",
+        callback_data=HomeworkCb(action="grade", homework_id=homework_id, student_id=student_id, offset=offset).pack(),
+    )
+    kb.button(
+        text="⬅ Назад",
+        callback_data=HomeworkCb(action="back", homework_id=homework_id, student_id=student_id, offset=offset).pack(),
+    )
     kb.adjust(1)
     return kb.as_markup()
 
@@ -193,22 +208,28 @@ def subscription_packages_kb(student_id: int) -> InlineKeyboardMarkup:
     kb.adjust(2)
     return kb.as_markup()
 
-def student_schedule_homework_kb(student_id: int, lessons, per_row: int = 6) -> InlineKeyboardMarkup:
+def student_schedule_homework_kb(student_id: int, homeworks, per_row: int = 6) -> InlineKeyboardMarkup:
+    """
+    homeworks: список Homework (или объектов с атрибутом .id)
+    """
     kb = InlineKeyboardBuilder()
 
-    for l in lessons:
+    for hw in homeworks:
         kb.button(
             text="ДЗ",
-            callback_data=HomeworkCb(action="view", lesson_id=l.id, student_id=student_id, offset=0).pack()
+            callback_data=HomeworkCb(
+                action="view",
+                homework_id=hw.id,
+                student_id=student_id,
+                offset=0,
+            ).pack(),
         )
 
-    # последняя кнопка — отдельной строкой
-    kb.button(text="Назад", callback_data=MenuCb(section="menu").pack())
-
-    # раскладка: ДЗ по per_row, затем 1 кнопка "Назад"
-    n = len(lessons)
-    rows = [per_row] * (n // per_row) + ([n % per_row] if n % per_row else []) + [1]
-    kb.adjust(*rows)
+    # раскладка по per_row, а последняя строка — "Назад"
+    kb.adjust(per_row)
+    kb.row(
+        InlineKeyboardButton(text="Назад", callback_data=MenuCb(section="menu").pack())
+    )
 
     return kb.as_markup()
 
@@ -218,12 +239,39 @@ def student_homework_back_kb() -> InlineKeyboardMarkup:
     kb.adjust(1)
     return kb.as_markup()
 
-def student_homework_kb(lesson_id: int, student_id: int) -> InlineKeyboardMarkup:
+def student_homework_kb(homework_id: int, student_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(
         text="Задание выполнено",
-        callback_data=HomeworkCb(action="done", lesson_id=lesson_id, student_id=student_id, offset=0).pack(),
+        callback_data=HomeworkCb(
+            action="done",
+            homework_id=homework_id,
+            student_id=student_id,
+            offset=0,
+        ).pack(),
     )
     kb.button(text="Назад к расписанию", callback_data=MenuCb(section="student_schedule").pack())
     kb.adjust(1, 1)
+    return kb.as_markup()
+
+def student_homeworks_list_kb(student_id: int, homeworks) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+
+    kb.button(text="➕ Добавить ДЗ", callback_data=AdminCb(action="hw_create", student_id=student_id).pack())
+
+    for hw in homeworks:
+        kb.button(
+            text=hw.title or "ДЗ",
+            callback_data=HomeworkCb(action="view", homework_id=hw.id, student_id=student_id, offset=0).pack(),
+        )
+
+    kb.button(text="Назад", callback_data=AdminCb(action="student", student_id=student_id).pack())
+    kb.adjust(1)
+    return kb.as_markup()
+
+def after_hw_added_kb(student_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Домашнее задание", callback_data=AdminCb(action="homeworks", student_id=student_id).pack())
+    kb.button(text="Карточка ученика", callback_data=AdminCb(action="student", student_id=student_id).pack())
+    kb.adjust(1)
     return kb.as_markup()

@@ -44,7 +44,7 @@ def all_callback_data(markup) -> list[str]:
 # ----------------- tests: render_lesson_card -----------------
 @pytest.mark.asyncio
 async def test_render_lesson_card_shows_planned_without_pay_button(session, monkeypatch):
-    import app.handlers.lesson_actions as mod
+    import app.handlers.admin.lessons as lesson_mod
 
     st = Student(full_name="S", timezone="Europe/Moscow", billing_mode=BillingMode.single, price_per_lesson=1000)
     session.add(st)
@@ -63,7 +63,7 @@ async def test_render_lesson_card_shows_planned_without_pay_button(session, monk
 
     call = FakeCallbackQuery(user_id=999)
 
-    await mod.render_lesson_card(call, session, student_id=st_id, offset=0)
+    await lesson_mod.render_lesson_card(call, session, student_id=st_id, offset=0)
 
     assert call.message.edits
     text, kwargs = call.message.edits[-1]
@@ -81,7 +81,7 @@ async def test_render_lesson_card_shows_planned_without_pay_button(session, monk
 
 
 async def test_render_lesson_card_shows_done_pending_with_pay_button_and_hides_done(session):
-    import app.handlers.lesson_actions as mod
+    import app.handlers.admin.lessons as lesson_mod
 
     st = Student(full_name="S", timezone="Europe/Moscow", billing_mode=BillingMode.single, price_per_lesson=1000)
     session.add(st)
@@ -108,7 +108,7 @@ async def test_render_lesson_card_shows_done_pending_with_pay_button_and_hides_d
     await session.commit()
 
     call = FakeCallbackQuery(user_id=999)
-    await mod.render_lesson_card(call, session, student_id=st_id, offset=0)
+    await lesson_mod.render_lesson_card(call, session, student_id=st_id, offset=0)
 
     text, kwargs = call.message.edits[-1]
     assert "не оплачено" in text.lower()
@@ -125,7 +125,7 @@ async def test_render_lesson_card_shows_done_pending_with_pay_button_and_hides_d
 
 @pytest.mark.asyncio
 async def test_render_lesson_card_excludes_done_paid_and_canceled(session):
-    import app.handlers.lesson_actions as mod
+    import app.handlers.admin.lessons as lesson_mod
 
     st = Student(full_name="S", timezone="Europe/Moscow", billing_mode=BillingMode.single, price_per_lesson=1000)
     session.add(st)
@@ -159,7 +159,7 @@ async def test_render_lesson_card_excludes_done_paid_and_canceled(session):
     await session.commit()
 
     call = FakeCallbackQuery(user_id=999)
-    await mod.render_lesson_card(call, session, student_id=st_id, offset=0)
+    await lesson_mod.render_lesson_card(call, session, student_id=st_id, offset=0)
 
     text, kwargs = call.message.edits[-1]
     # должен быть показан planned урок, а не done+paid и не canceled
@@ -231,7 +231,8 @@ async def test_admin_student_card_shows_balance_for_subscription(session):
 
 @pytest.mark.asyncio
 async def test_lesson_pay_paid_marks_paid_and_lesson_disappears(session):
-    import app.handlers.lesson_actions as mod
+    import app.handlers.admin.lessons as lesson_mod
+    import app.handlers.admin.payments as payment_mod
 
     # teacher (для ensure_teacher в lesson_pay_action)
     teacher = User(tg_id=7100, role=Role.teacher, name="T", timezone="Europe/Moscow")
@@ -259,14 +260,14 @@ async def test_lesson_pay_paid_marks_paid_and_lesson_disappears(session):
 
     # убедимся: карточка урока сейчас показывает "не оплачено" и кнопку оплаты
     call0 = FakeCallbackQuery(user_id=teacher.tg_id)
-    await mod.render_lesson_card(call0, session, student_id=st_id, offset=0)
+    await lesson_mod.render_lesson_card(call0, session, student_id=st_id, offset=0)
     text0, kwargs0 = call0.message.edits[-1]
     assert "не оплачено" in text0.lower()
     assert LessonPayCb(action="paid", lesson_id=lesson.id, student_id=st_id, offset=0).pack() in all_callback_data(kwargs0["reply_markup"])
 
     # нажимаем "урок оплачен" (по lesson_id)
     call1 = FakeCallbackQuery(user_id=teacher.tg_id)
-    await mod.lesson_pay_action(call1, LessonPayCb(action="paid", lesson_id=lesson.id, student_id=st_id, offset=0), session)
+    await payment_mod.lesson_pay_action(call1, LessonPayCb(action="paid", lesson_id=lesson.id, student_id=st_id, offset=0), session)
 
     # начисление стало paid
     ch_db = (await session.execute(select(LessonCharge).where(LessonCharge.lesson_id == lesson.id))).scalar_one()
@@ -275,7 +276,7 @@ async def test_lesson_pay_paid_marks_paid_and_lesson_disappears(session):
 
     # теперь render_lesson_card должен сказать "Ближайших уроков нет."
     call2 = FakeCallbackQuery(user_id=teacher.tg_id)
-    await mod.render_lesson_card(call2, session, student_id=st_id, offset=0)
+    await lesson_mod.render_lesson_card(call2, session, student_id=st_id, offset=0)
     text2, _ = call2.message.edits[-1]
     assert "Ближайших уроков нет" in text2
 

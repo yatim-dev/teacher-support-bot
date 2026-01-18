@@ -31,8 +31,8 @@ class FsmNavCb(CallbackData, prefix="fsm"):
     student_id: int | None = None
 
 class HomeworkCb(CallbackData, prefix="hw"):
-    action: str          # view|edit|grade|back
-    lesson_id: int
+    action: str
+    homework_id: int
     student_id: int
     offset: int = 0
 

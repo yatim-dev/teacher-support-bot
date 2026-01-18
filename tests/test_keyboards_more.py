@@ -114,8 +114,8 @@ def test_student_delete_confirm_kb_contains_confirm_and_back():
 
 
 def test_homework_kb_contains_edit_grade_back():
-    kb = homework_kb(lesson_id=1, student_id=2, offset=3)
+    kb = homework_kb(homework_id=1, student_id=2, offset=3)
     cbs = _cbs(kb)
-    assert HomeworkCb(action="edit", lesson_id=1, student_id=2, offset=3).pack() in cbs
-    assert HomeworkCb(action="grade", lesson_id=1, student_id=2, offset=3).pack() in cbs
-    assert HomeworkCb(action="back", lesson_id=1, student_id=2, offset=3).pack() in cbs
+    assert HomeworkCb(action="edit", homework_id=1, student_id=2, offset=3).pack() in cbs
+    assert HomeworkCb(action="grade", homework_id=1, student_id=2, offset=3).pack() in cbs
+    assert HomeworkCb(action="back", homework_id=1, student_id=2, offset=3).pack() in cbs

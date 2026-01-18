@@ -9,8 +9,10 @@ from app.models import (
     LessonCharge, ChargeStatus,
 )
 
-import app.handlers.lesson_actions as la_mod
 from app.callbacks import LessonPayCb
+
+import app.handlers.admin.lessons as lessons_mod
+import app.handlers.admin.payments as payments_mod
 
 # ---- fakes ----
 class FakeFromUser:
@@ -83,7 +85,7 @@ async def test_render_planned_single_shows_pay_button(session):
     msg = FakeMessage(FakeFromUser(teacher.tg_id))
     call = FakeCallbackQuery(from_user=msg.from_user, message=msg)
 
-    await la_mod.render_lesson_card(call, session, student_id=st_id, offset=0)
+    await lessons_mod.render_lesson_card(call, session, student_id=st_id, offset=0)
 
     text, kwargs = msg.edits[-1]
     assert "оплата" in text.lower()
@@ -121,7 +123,7 @@ async def test_pay_lesson_anytime_creates_paid_charge_for_planned(session):
     msg = FakeMessage(FakeFromUser(teacher.tg_id))
     call = FakeCallbackQuery(from_user=msg.from_user, message=msg)
 
-    await la_mod.lesson_pay_action(
+    await payments_mod.lesson_pay_action(
         call,
         LessonPayCb(action="paid", lesson_id=lesson.id, student_id=st_id, offset=0),
         session,
@@ -140,7 +142,7 @@ async def test_pay_lesson_anytime_creates_paid_charge_for_planned(session):
     # При повторном рендере кнопки оплаты быть не должно
     msg2 = FakeMessage(FakeFromUser(teacher.tg_id))
     call2 = FakeCallbackQuery(from_user=msg2.from_user, message=msg2)
-    await la_mod.render_lesson_card(call2, session, student_id=st_id, offset=0)
+    await lessons_mod.render_lesson_card(call2, session, student_id=st_id, offset=0)
 
     text2, kwargs2 = msg2.edits[-1]
     assert "оплата" in text2.lower()
@@ -188,7 +190,7 @@ async def test_done_paid_lesson_is_hidden_from_lesson_card(session):
     msg = FakeMessage(FakeFromUser(teacher.tg_id))
     call = FakeCallbackQuery(from_user=msg.from_user, message=msg)
 
-    await la_mod.render_lesson_card(call, session, student_id=st_id, offset=0)
+    await lessons_mod.render_lesson_card(call, session, student_id=st_id, offset=0)
 
     text, _ = msg.edits[-1]
     assert "Ближайших уроков нет" in text

@@ -93,7 +93,7 @@ async def add_rule_duration(message: Message, state: FSMContext, session):
 
     await state.update_data(duration_min=dur)
     await state.set_state(AddRuleFSM.start_date)
-    await message.answer("Введите дату начала YYYY-MM-DD, например 2026-01-10")
+    await message.answer("Введите дату начала YYYY-MM-DD, например `2026-01-10`")
 
 
 @router.message(AddRuleFSM.start_date)
@@ -106,7 +106,7 @@ async def add_rule_start_date(message: Message, state: FSMContext, session):
         y, m, d = map(int, txt.split("-"))
         sd = date(y, m, d)
     except Exception:
-        await message.answer("Формат YYYY-MM-DD, например 2026-01-10")
+        await message.answer("Формат YYYY-MM-DD, например `2026-01-10`")
         return
 
     data = await state.get_data()

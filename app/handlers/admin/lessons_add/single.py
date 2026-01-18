@@ -31,7 +31,7 @@ async def add_single_start(call: CallbackQuery, callback_data: AdminCb, state: F
     await state.set_state(AddSingleLessonFSM.date_)
 
     await call.message.edit_text(
-        "Разовое занятие.\nВведите дату YYYY-MM-DD, например 2026-01-10:",
+        "Разовое занятие.\nВведите дату YYYY-MM-DD, например `2026-01-10`:",
         reply_markup=fsm_nav_kb("add_single", student_id)
     )
     await call.answer()
@@ -51,7 +51,7 @@ async def add_single_date(message: Message, state: FSMContext, session):
         dval = date(y, m, d)
     except Exception:
         await message.answer(
-            "Формат YYYY-MM-DD, например 2026-01-10",
+            "Формат YYYY-MM-DD, например `2026-01-10`",
             reply_markup=fsm_nav_kb("add_single", student_id)
         )
         return

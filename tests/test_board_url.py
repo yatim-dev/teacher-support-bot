@@ -1,44 +1,46 @@
 import pytest
-from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from sqlalchemy import select
 
-from app.models import User, Role, Student, BillingMode
 from app.callbacks import AdminCb
+from app.models import User, Role, Student, BillingMode
 
 
 # ----------------- fakes -----------------
 class FakeFromUser:
-    def __init__(self, user_id: int):
+    def __init__(self, user_id: int, full_name: str = "X"):
         self.id = user_id
+        self.full_name = full_name
 
 
 class FakeMessage:
-    def __init__(self, from_user: FakeFromUser, text: str | None = None):
-        self.from_user = from_user
+    """
+    Универсальный fake Message:
+    - для FSM-хендлеров: message.text + message.answer(...)
+    - для callback-хендлеров: message.edit_text(...)
+    """
+    def __init__(self, from_user: FakeFromUser | None = None, text: str = ""):
+        self.from_user = from_user or FakeFromUser(0)
         self.text = text
+
         self.answers: list[tuple[str, dict]] = []
-
-    async def answer(self, text: str, **kwargs):
-        self.answers.append((text, kwargs))
-
-
-class FakeEditMessage:
-    def __init__(self):
         self.edits: list[tuple[str, dict]] = []
 
-    async def edit_text(self, text: str, **kwargs):
-        self.edits.append((text, kwargs))
+    async def answer(self, text: str, reply_markup=None, **kwargs):
+        self.answers.append((text, {"reply_markup": reply_markup, **kwargs}))
+
+    async def edit_text(self, text: str, reply_markup=None, **kwargs):
+        self.edits.append((text, {"reply_markup": reply_markup, **kwargs}))
 
 
 class FakeCallbackQuery:
     def __init__(self, user_id: int):
-        self.from_user = FakeFromUser(user_id)
-        self.message = FakeEditMessage()
-        self.answer_calls = 0
-
-    async def answer(self, *args, **kwargs):
-        self.answer_calls += 1
+        fu = FakeFromUser(user_id)
+        self.from_user = SimpleNamespace(id=user_id, full_name=fu.full_name)
+        self.message = FakeMessage(from_user=fu)
+        self.answer = AsyncMock()
 
 
 class FakeFSMContext:
@@ -48,6 +50,7 @@ class FakeFSMContext:
         self.cleared = False
 
     async def set_state(self, state):
+        # aiogram State хранит строку в .state
         self._state = state.state if hasattr(state, "state") else state
 
     async def get_state(self):
@@ -76,7 +79,7 @@ async def mk_teacher(session, tg_id: int = 9001) -> User:
 @pytest.mark.asyncio
 async def test_create_student_tz_goes_to_board_url_and_does_not_ask_billing(session):
     """
-    Защищаемся от бага "после TZ пришло 2 сообщения: про доску и про тариф".
+    Защищаемся от бага: после TZ не должно появляться сообщение "выберите тариф".
     """
     from app.handlers.admin.create_student import create_student_tz, CreateStudentFSM
     from app.keyboards import TZ_LIST
@@ -88,10 +91,12 @@ async def test_create_student_tz_goes_to_board_url_and_does_not_ask_billing(sess
     await create_student_tz(msg, state, session)
 
     assert await state.get_state() == CreateStudentFSM.board_url.state
-    assert msg.answers, "Должно быть сообщение с просьбой ввести ссылку"
-    assert "ссылку на доску" in msg.answers[-1][0].lower()
+    assert msg.answers, "Должно быть хотя бы одно сообщение после ввода TZ"
 
-    # главное: не должно быть второго сообщения про тариф на этом шаге
+    # Должна быть просьба про доску (не привязываемся к точной фразе 1-в-1)
+    assert any(("ссыл" in t.lower() and "доск" in t.lower()) for t, _ in msg.answers)
+
+    # Главное: не должно быть сообщения про тариф на этом шаге
     assert not any("выберите тариф" in t.lower() for t, _ in msg.answers)
 
 
@@ -108,15 +113,14 @@ async def test_create_student_board_url_invalid_url_rejected(session):
 
     assert msg.answers
     assert "http" in msg.answers[-1][0].lower()
-    # остаёмся на том же шаге
     assert await state.get_state() == CreateStudentFSM.board_url.state
 
 
 @pytest.mark.asyncio
 async def test_create_student_finalize_saves_board_url_for_subscription(session):
     """
-    Полный happy-path (короткий): full_name -> tz -> board_url -> billing(subscription) -> finalize.
-    Проверяем, что board_url реально сохранился у Student.
+    Happy-path: full_name -> tz -> board_url -> billing(subscription).
+    Проверяем, что board_url сохранился у Student.
     """
     from app.handlers.admin.create_student import (
         create_student_full_name,
@@ -146,7 +150,7 @@ async def test_create_student_finalize_saves_board_url_for_subscription(session)
     await create_student_board_url(msg3, state, session)
     assert await state.get_state() == CreateStudentFSM.billing.state
 
-    # billing -> subscription -> finalize_student
+    # billing -> subscription -> finalize
     msg4 = FakeMessage(FakeFromUser(teacher.tg_id), text="subscription")
     await create_student_billing(msg4, state, session)
 
@@ -180,18 +184,18 @@ async def test_admin_student_card_contains_board_url(session):
     await mod.admin_student_card(call, cb, session)
 
     assert call.message.edits
-    text, _ = call.message.edits[-1]
+    text, _kwargs = call.message.edits[-1]
     assert "Доска:" in text
     assert "https://example.com/board/123" in text
+
+    call.answer.assert_awaited()
 
 
 # ----------------- tests: student_schedule shows board_url -----------------
 @pytest.mark.asyncio
 async def test_student_schedule_shows_board_url_in_text(session):
-    import app.handlers.student as menu_mod
-    from app.callbacks import MenuCb
+    import app.handlers.student as student_mod
 
-    # user-student
     u = User(tg_id=9301, role=Role.student, name="SUser", timezone="Europe/Moscow")
     session.add(u)
     await session.flush()
@@ -207,13 +211,15 @@ async def test_student_schedule_shows_board_url_in_text(session):
     await session.commit()
 
     call = FakeCallbackQuery(user_id=u.tg_id)
-    cb = MenuCb(section="student_schedule")
-    await menu_mod.student_schedule(call, session)
+
+    await student_mod.student_schedule(call, session)
 
     assert call.message.edits
-    text, _ = call.message.edits[-1]
+    text, _kwargs = call.message.edits[-1]
     assert "Ваша доска:" in text
     assert "https://example.com/board/student" in text
+
+    call.answer.assert_awaited()
 
 
 # ----------------- tests: board edit FSM -----------------
@@ -240,7 +246,6 @@ async def test_board_edit_flow_sets_new_url(session):
     assert await state.get_state() == EditBoardFSM.url.state
     assert call.message.edits
 
-    # отправляем новое значение
     msg = FakeMessage(FakeFromUser(teacher.tg_id), text="https://miro.com/app/board/new")
     await board_mod.board_edit_set(msg, state, session)
 

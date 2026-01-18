@@ -61,10 +61,11 @@ def test_fsm_nav_cb_roundtrip():
 
 
 def test_homework_cb_roundtrip():
-    cb = HomeworkCb(action="view", lesson_id=1, student_id=2, offset=0)
+    cb = HomeworkCb(action="view", homework_id=1, student_id=2, offset=0)
     packed = cb.pack()
     restored = HomeworkCb.unpack(packed)
     assert restored.action == "view"
-    assert restored.lesson_id == 1
+    assert restored.homework_id == 1
     assert restored.student_id == 2
     assert restored.offset == 0
+
